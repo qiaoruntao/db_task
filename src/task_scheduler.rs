@@ -5,16 +5,16 @@ use std::sync::Arc;
 use chrono::Local;
 use futures::TryStreamExt;
 use lazy_static::lazy_static;
+use mongodb::{Collection, Cursor};
 use mongodb::bson::Bson::Null;
 use mongodb::bson::doc;
 use mongodb::bson::Document;
 use mongodb::bson::oid::ObjectId;
-use mongodb::Cursor;
 use mongodb::error::{ErrorKind, WriteFailure};
-use mongodb::options::ReturnDocument;
+use mongodb::options::{FindOneAndUpdateOptions, ReturnDocument};
 use qrt_rust_utils::mongodb_manager::mongodb_manager::MongoDbManager;
+use serde::{Deserialize, Serialize};
 use serde::de::DeserializeOwned;
-use serde::Serialize;
 use tokio::sync::{Mutex, RwLock};
 use tracing::trace;
 
@@ -55,6 +55,16 @@ pub struct TaskScheduler {
     task_collection_name: String,
 }
 
+#[derive(Debug, Serialize, Deserialize)]
+struct MongodbIdEntity {
+    _id: ObjectId,
+}
+
+pub enum ReInitResult {
+    Updated(ObjectId),
+    Inserted(ObjectId),
+}
+
 impl TaskScheduler {
     pub fn new(db_manager: MongoDbManager, collection_name: String) -> TaskScheduler {
         TaskScheduler {
@@ -90,6 +100,71 @@ impl TaskScheduler {
                     }
                     _ => {}
                 }
+                Err(e.into())
+            }
+        }
+    }
+
+    // re-init task if mark as completed, used to fix incorrectly completed task, create task if not exists
+    pub async fn re_init_task<ParamType, StateType>(
+        &self,
+        task: Arc<RwLock<Task<ParamType, StateType>>>,
+        upsert: bool,
+    ) -> Result<ReInitResult, TaskSchedulerError>
+        where
+            ParamType: Debug + Serialize + DeserializeOwned + Unpin + Sync + Send + PartialEq,
+            StateType: Debug + Serialize + DeserializeOwned + Unpin + Sync + Send + PartialEq,
+    {
+        let collection = self
+            .db_manager
+            .lock()
+            .await
+            .get_collection::<Task<ParamType, StateType>>(self.task_collection_name.as_str());
+        let arc = task.clone();
+        let guard = arc.try_read().unwrap();
+
+        let task_guard = guard.deref();
+        let pending_filter = TaskScheduler::generate_pending_task_condition(None);
+        let filter = doc! {
+            "$and":[
+                {"$nor":[pending_filter]},
+                {"key":&task_guard.key}
+            ]
+        };
+        let mut update_option = FindOneAndUpdateOptions::default();
+        update_option.return_document = ReturnDocument::After.into();
+        update_option.projection = Some(doc! {
+            "_id":1
+        });
+        let id_only_collection: Collection<MongodbIdEntity> = collection.clone_with_type();
+
+        // let json = serde_json::to_string(&filter).unwrap();
+        // println!("{}", &json);
+        match id_only_collection.find_one_and_update(filter, doc! {
+            "$set":{
+                "task_state.start_time": null,
+                "task_state.complete_time": null,
+            }
+        }, Some(update_option)).await {
+            Ok(Some(result)) => {
+                // dbg!(&result);
+                Ok(ReInitResult::Updated(result._id))
+            }
+            Ok(None) => {
+                if upsert {
+                    match self.send_task(task).await {
+                        Ok(object_id) => {
+                            Ok(ReInitResult::Inserted(object_id))
+                        }
+                        Err(e) => {
+                            Err(e.into())
+                        }
+                    }
+                } else {
+                    Err(TaskSchedulerError::NoMatchedTask)
+                }
+            }
+            Err(e) => {
                 Err(e.into())
             }
         }
@@ -196,10 +271,37 @@ impl TaskScheduler {
         Ok(cursor)
     }
 
+    pub async fn find_task_by_key<ParamType, StateType>(
+        &self,
+        key: &str,
+    ) -> Result<Arc<RwLock<Task<ParamType, StateType>>>, TaskSchedulerError>
+        where
+            ParamType: Debug + Serialize + DeserializeOwned + Unpin + Sync + Send + PartialEq,
+            StateType: Debug + Serialize + DeserializeOwned + Unpin + Sync + Send + PartialEq,
+    {
+        let options = mongodb::options::FindOptions::default();
+
+        let collection = self
+            .db_manager
+            .lock()
+            .await
+            .get_collection::<Task<ParamType, StateType>>(self.task_collection_name.as_str());
+        let filter = doc! {"key":key};
+
+        return match collection.find(filter, Some(options)).await {
+            Err(e) => Err(e.into()),
+            Ok(mut cursor) => {
+                let cursor_result = cursor.try_next().await?;
+                match cursor_result {
+                    Some(result) => Ok(Arc::new(RwLock::new(result))),
+                    None => Err(TaskSchedulerError::NoPendingTask),
+                }
+            }
+        };
+    }
     //noinspection RsExtraSemicolon
     fn generate_pending_task_condition(custom_filter: Option<Document>) -> Document {
         let mut conditions = vec![
-            doc! {"task_state.complete_time":Null},
             doc! {"task_state.complete_time":Null},
             doc! {
                 "$or":[
@@ -593,6 +695,21 @@ mod test_task_scheduler {
         let scheduler = TaskScheduler::new(db_manager, COLLECTION_NAME.clone());
         let arc = scheduler.find_and_occupy_pending_task::<i32, i32>(None).await.unwrap();
         let result = scheduler.fail_task(arc).await;
+        trace!("&complete_result={:?}",&result);
+    }
+
+    #[tokio::test]
+    async fn re_init_task() {
+        let logger_config = LoggerConfig {
+            level: "trace".to_string()
+        };
+        Logger::init_logger(&logger_config);
+        let result = ConfigManager::read_config_with_directory("./config/mongo").unwrap();
+        let db_manager = MongoDbManager::new(result, "Logger").unwrap();
+        let scheduler = TaskScheduler::new(db_manager, COLLECTION_NAME.clone());
+        let arc = scheduler.find_task_by_key::<i32, i32>("aaa").await.unwrap();
+        arc.try_write().unwrap().key = "aaa".parse().unwrap();
+        let result = scheduler.re_init_task(arc, true).await;
         trace!("&complete_result={:?}",&result);
     }
 }
