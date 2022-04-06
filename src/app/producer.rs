@@ -1,4 +1,5 @@
 use std::sync::Arc;
+
 use async_trait::async_trait;
 use chrono::Local;
 use mongodb::error::{ErrorKind, WriteFailure};
@@ -11,13 +12,13 @@ use crate::task::TaskRequest;
 
 #[async_trait]
 pub trait TaskProducer<T: TaskInfo + 'static>: Send + Sync + std::marker::Sized + 'static + TaskAppCommon<T> {
-    async fn send_task(self:Arc<Self>, key: &str, param: T::Params) -> anyhow::Result<bool> {
+    async fn send_task(self: Arc<Self>, key: &str, param: T::Params) -> anyhow::Result<bool> {
         let collection = self.get_collection();
         let request = TaskRequest {
             key: key.to_string(),
             options: Some(TaskOptions::default()),
-            // TODO: default to run immediately
-            state: TaskState::gen_initial(Local::now()),
+            // default to run immediately
+            state: TaskState::gen_initial(None),
             param,
         };
         match collection.insert_one(request, None).await {

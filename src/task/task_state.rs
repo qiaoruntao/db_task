@@ -15,7 +15,7 @@ pub struct TaskState {
     )]
     // #[serde_as(as = "Option<serde_with::DurationSeconds<i64>>")]
     pub create_time: DateTime<Local>,
-    /// next time can this task run
+    /// next time can this task run, None means run immediately
     #[serde(
     serialize_with = "serialize_datetime_option_as_datetime",
     deserialize_with = "deserialize_datetime_as_datetime_option"
@@ -77,11 +77,11 @@ impl TaskState {
     }
 
     /// current time related
-    pub fn gen_initial(allow_run_time: DateTime<Local>) -> TaskState {
+    pub fn gen_initial(allow_run_time: Option<DateTime<Local>>) -> TaskState {
         let now = Local::now();
         TaskState {
             create_time: now,
-            next_run_time: Option::from(allow_run_time),
+            next_run_time: allow_run_time,
             success_time: None,
             ping_time: None,
             cancel_time: None,

@@ -10,7 +10,7 @@ use mongodb::change_stream::event::ChangeStreamEvent;
 use mongodb::Collection;
 use mongodb::options::{ChangeStreamOptions, FindOneAndUpdateOptions, FindOneOptions, FullDocumentType, ReturnDocument};
 use serde::{Deserialize, Serialize};
-use tracing::{debug, error};
+use tracing::{debug, error, info};
 
 use crate::app::common::TaskAppCommon;
 use crate::task::{TaskConfig, TaskInfo, TaskRequest};
@@ -115,7 +115,7 @@ pub trait TaskConsumer<T: TaskInfo + 'static>: Send + Sync + std::marker::Sized 
                 _=tokio::time::sleep(duration)=>{
                     tokio::spawn(self.clone().handle_wait_task_sleep(key.clone(),chrono_duration));
                 }
-                // TODO: how to consume it once without stream?
+                // TODO: how to consume it only once without stream?
                 Some(execution_result)=task_execution.next()=>{
                     let _result=self.handle_execution_result(execution_result, key).await;
                     break;
@@ -123,9 +123,6 @@ pub trait TaskConsumer<T: TaskInfo + 'static>: Send + Sync + std::marker::Sized 
                 // TODO: add task timeout
             }
         }
-    }
-    async fn fetch_next_task() -> (chrono::DateTime<Local>, Option<T::Params>) {
-        (chrono::Local::now(), None)
     }
 
     async fn handle_change_stream(self: Arc<Self>, event: ChangeStreamEvent<TaskStateNextRunTime>) -> Option<DateTime<Local>> {
@@ -215,6 +212,10 @@ pub trait TaskConsumer<T: TaskInfo + 'static>: Send + Sync + std::marker::Sized 
         }
         // if we don't have concurrency, we won't search
         let task = self.clone().search_and_occupy(collection).await;
+        if !is_changed && task.is_some() {
+            // TODO: not sure about this
+            error!("changed but get new task");
+        }
         let arc = self.clone();
         let add_task = async move {
             if let Some(currency) = arc.get_concurrency() {
@@ -229,11 +230,15 @@ pub trait TaskConsumer<T: TaskInfo + 'static>: Send + Sync + std::marker::Sized 
                 self.clone().consume_task(task.key, task.param, task.options.unwrap_or_default()).await;
                 add_task.await;
             });
+            // cannot infer a correct next-run-time right now, try occupy again
             return Some(chrono::Local::now());
+        } else {
+            // immediately use it
+            add_task.await;
         }
-        //
-        add_task.await;
+
         if !is_changed {
+            // no need to check now
             return None;
         }
 
@@ -247,7 +252,7 @@ pub trait TaskConsumer<T: TaskInfo + 'static>: Send + Sync + std::marker::Sized 
         }
     }
     async fn start(self: Arc<Self>) -> anyhow::Result<()> {
-        // TODO: also check before send
+        // TODO: need to check before send task
         if !self.check_collection_index().await {
             return Err(anyhow::Error::msg("unique index is not set"));
         }
@@ -279,6 +284,7 @@ pub trait TaskConsumer<T: TaskInfo + 'static>: Send + Sync + std::marker::Sized 
         // TODO: how actually does it work?
         change_stream_options.max_await_time = Some(Duration::from_secs(10));
         let watch_collection = collection.clone_with_type::<TaskStateNextRunTime>();
+        // TODO: what if tcp reset?
         let mut change_stream = match watch_collection.watch(pipeline, Some(change_stream_options)).await {
             Ok(value) => { value }
             Err(e) => {
@@ -288,7 +294,7 @@ pub trait TaskConsumer<T: TaskInfo + 'static>: Send + Sync + std::marker::Sized 
         };
         debug!("change stream listening");
         let mut wakeup_time = tokio::time::Instant::now();
-        // whether remote dataset has changed, if not changed, we don't need to fetch_next_run_time
+        // whether remote dataset has changed, if not changed, we don't need to fetch anything from db
         let mut is_changed = true;
         loop {
             tokio::select! {
@@ -307,6 +313,7 @@ pub trait TaskConsumer<T: TaskInfo + 'static>: Send + Sync + std::marker::Sized 
                     }
                     is_changed=false;
                 }
+                // TODO: None doesn't seem to exist
                 Some(stream_event)=change_stream.next()=>{
                     // change stream is only used to detect a better next run time now
                     if let Ok(event)=stream_event{

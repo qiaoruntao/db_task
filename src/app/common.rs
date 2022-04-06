@@ -8,6 +8,8 @@ use crate::{TaskInfo, TaskRequest};
 pub trait TaskAppCommon<T: TaskInfo> {
     fn get_collection(&self) -> &Collection<TaskRequest<T>>;
 
+    /// check if key is a unique index right now,
+    /// key should be unique as we use key to search a specific task
     async fn check_collection_index(&self) -> bool {
         let collection = self.get_collection();
         let mut cursor = collection.list_indexes(None).await.unwrap();
