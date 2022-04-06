@@ -10,7 +10,7 @@ use mongodb::change_stream::event::ChangeStreamEvent;
 use mongodb::Collection;
 use mongodb::options::{ChangeStreamOptions, FindOneAndUpdateOptions, FindOneOptions, FullDocumentType, ReturnDocument};
 use serde::{Deserialize, Serialize};
-use tracing::{debug, error, info};
+use tracing::{debug, error};
 
 use crate::app::common::TaskAppCommon;
 use crate::task::{TaskConfig, TaskInfo, TaskRequest};
@@ -260,7 +260,7 @@ pub trait TaskConsumer<T: TaskInfo + 'static>: Send + Sync + std::marker::Sized 
         let pipeline = [
             doc! {
                 "$match":{
-                    "operationType":{"$in":vec!["insert", "update", "replace"]},
+                    "operationType":{"$in":["insert", "update", "replace"]},
                     "$or":[
                         {"updateDescription.updatedFields.state.next_run_time":{"$exists":true}},
                         {"updateDescription.removedFields.state.next_run_time":{"$exists":true}}

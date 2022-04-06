@@ -1,7 +1,6 @@
 use std::sync::Arc;
 
 use async_trait::async_trait;
-use chrono::Local;
 use mongodb::error::{ErrorKind, WriteFailure};
 use tracing::{debug, error};
 
