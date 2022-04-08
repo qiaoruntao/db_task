@@ -4,8 +4,10 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
 use std::time::Duration;
 
-use async_trait::async_trait;
-use mongodb::{Client, Collection};
+pub use anyhow;
+pub use async_trait;
+use mongodb::Client;
+pub use mongodb;
 use mongodb::options::ClientOptions;
 use serde::{Deserialize, Serialize};
 
@@ -36,7 +38,7 @@ impl TaskInfo for TestInfo {
 struct Test {
     config: TaskConfig,
     concurrency: AtomicUsize,
-    collection: Collection<TaskRequest<TestInfo>>,
+    collection: mongodb::Collection<TaskRequest<TestInfo>>,
 }
 
 impl Test {
@@ -60,7 +62,7 @@ impl Test {
     }
 }
 
-#[async_trait]
+#[async_trait::async_trait]
 impl TaskConsumer<TestInfo> for Test {
     fn get_default_option(&'_ self) -> &'_ TaskConfig {
         &self.config
@@ -81,12 +83,12 @@ impl TaskConsumer<TestInfo> for Test {
 
 
 impl TaskAppCommon<TestInfo> for Test {
-    fn get_collection(&self) -> &Collection<TaskRequest<TestInfo>> {
+    fn get_collection(&self) -> &mongodb::Collection<TaskRequest<TestInfo>> {
         &self.collection
     }
 }
 
-#[async_trait]
+#[async_trait::async_trait]
 impl TaskProducer<TestInfo> for Test {}
 
 #[cfg(test)]

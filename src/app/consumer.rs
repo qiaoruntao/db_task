@@ -257,6 +257,8 @@ pub trait TaskConsumer<T: TaskInfo + 'static>: Send + Sync + std::marker::Sized 
             return Err(anyhow::Error::msg("unique index is not set"));
         }
         let collection = self.get_collection();
+        // very helpful resource
+        // https://www.percona.com/blog/2018/03/07/using-mongodb-3-6-change-streams/
         let pipeline = [
             doc! {
                 "$match":{
