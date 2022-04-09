@@ -11,7 +11,7 @@ use crate::task::TaskRequest;
 
 #[async_trait]
 pub trait TaskProducer<T: TaskInfo>: Send + Sync + std::marker::Sized + 'static + TaskAppCommon<T> {
-    async fn send_task(self: Arc<Self>, key: &str, param: T::Params) -> anyhow::Result<bool> {
+    async fn send_task(&self, key: &str, param: T::Params) -> anyhow::Result<bool> {
         let collection = self.get_collection();
         let request = TaskRequest {
             key: key.to_string(),
