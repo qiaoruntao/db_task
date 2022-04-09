@@ -36,7 +36,7 @@ pub trait TaskConsumeCore<T: TaskInfo>: Send + Sync + std::marker::Sized + 'stat
 #[async_trait]
 pub trait TaskConsumer<T: TaskInfo>: TaskConsumeFunc<T> + TaskConsumeCore<T> {
     /// how the client handle the task
-    async fn handle_execution_result(self: Arc<Self>, result: anyhow::Result<T::Returns>, key: String) -> anyhow::Result<bool> {
+    async fn handle_execution_result(self: Arc<Self>, result: anyhow::Result<T::Returns>, key: String, retry_delay: Option<chrono::Duration>) -> anyhow::Result<bool> {
         let collection = self.get_collection();
         let filter = doc! {"key":&key};
         let is_success = result.is_ok();
@@ -48,7 +48,9 @@ pub trait TaskConsumer<T: TaskInfo>: TaskConsumeFunc<T> + TaskConsumeCore<T> {
             }
             Err(e) => {
                 error!("execution failed, e={}",e);
-                let update = doc! {"$set":{"state.prev_fail_time":chrono::Local::now()}};
+                let delay = retry_delay.unwrap_or_else(|| chrono::Duration::seconds(10));
+                let next_run_time = chrono::Local::now() + delay;
+                let update = doc! {"$set":{"state.prev_fail_time":chrono::Local::now(), "state.next_run_time":next_run_time}};
                 collection.find_one_and_update(filter, update, None).await
             }
         };
@@ -125,7 +127,7 @@ pub trait TaskConsumer<T: TaskInfo>: TaskConsumeFunc<T> + TaskConsumeCore<T> {
                 }
                 // TODO: how to consume it only once without stream?
                 Some(execution_result)=task_execution.next()=>{
-                    let _result=self.handle_execution_result(execution_result, key).await;
+                    let _result=self.handle_execution_result(execution_result, key, options.min_retry_delay).await;
                     break;
                 }
                 // TODO: add task timeout
@@ -135,7 +137,6 @@ pub trait TaskConsumer<T: TaskInfo>: TaskConsumeFunc<T> + TaskConsumeCore<T> {
 
     async fn handle_change_stream(self: Arc<Self>, event: ChangeStreamEvent<TaskStateNextRunTime>) -> Option<DateTime<Local>> {
         debug!("handle_change_stream");
-        dbg!(&event);
         event.full_document.map(|doc| doc.next_run_time)
     }
 
@@ -165,9 +166,7 @@ pub trait TaskConsumer<T: TaskInfo>: TaskConsumeFunc<T> + TaskConsumeCore<T> {
         filter.insert("state.success_time", Bson::Null);
         filter.insert("state.cancel_time", Bson::Null);
         if can_run_now {
-            filter.insert("$or", vec![
-                doc! {"state.next_run_time":{"$lte":chrono::Local::now()}},
-            ]);
+            filter.insert("state.next_run_time", doc! {"$lte":chrono::Local::now()});
         }
         filter
     }
@@ -274,25 +273,6 @@ pub trait TaskConsumer<T: TaskInfo>: TaskConsumeFunc<T> + TaskConsumeCore<T> {
         // https://www.percona.com/blog/2018/03/07/using-mongodb-3-6-change-streams/
         let pipeline = [
             doc! {
-                "$match":{
-                    "$or":[
-                        // assume all inserted task can run
-                        {"operationType":"insert"},
-                        {
-                            "$and":[
-                                {"operationType":"update"},
-                                {
-                                    "$or":[
-                                        {"updateDescription.updatedFields.state.next_run_time":{"$exists":true}},
-                                        {"updateDescription.removedFields.state.next_run_time":{"$exists":true}}
-                                    ]
-                                }
-                            ]
-                        }
-                    ]
-                }
-            },
-            doc! {
                 "$addFields":{
                     "fullDocument":"$fullDocument.state",
                     "state":"$fullDocument.state"
@@ -314,6 +294,7 @@ pub trait TaskConsumer<T: TaskInfo>: TaskConsumeFunc<T> + TaskConsumeCore<T> {
         change_stream_options.max_await_time = Some(Duration::from_secs(10));
         let watch_collection = collection.clone_with_type::<TaskStateNextRunTime>();
         // TODO: what if tcp reset?
+        // TODO: update success time will incur another change stream event, cannot filter it
         let mut change_stream = match watch_collection.watch(pipeline, Some(change_stream_options)).await {
             Ok(value) => { value }
             Err(e) => {
@@ -342,9 +323,10 @@ pub trait TaskConsumer<T: TaskInfo>: TaskConsumeFunc<T> + TaskConsumeCore<T> {
                     }
                     is_changed=false;
                 }
-                // TODO: None doesn't seem to exist
+                // None doesn't seem to exist
                 Some(stream_event)=change_stream.next()=>{
                     // change stream is only used to detect a better next run time now
+                    debug!("{:#?}",&stream_event);
                     if let Ok(event)=stream_event{
                         is_changed=true;
                         let this_check_time = match self.clone().handle_change_stream(event).await{
@@ -355,8 +337,6 @@ pub trait TaskConsumer<T: TaskInfo>: TaskConsumeFunc<T> + TaskConsumeCore<T> {
                         };
                         let this_wakeup_time = tokio::time::Instant::now()+(this_check_time-chrono::Local::now()).to_std().unwrap_or(Duration::ZERO);
                         wakeup_time=this_wakeup_time.min(wakeup_time);
-                    }else{
-                        dbg!(&stream_event);
                     }
                 }
             }

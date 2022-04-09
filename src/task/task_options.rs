@@ -9,8 +9,10 @@ pub struct TaskOptions {
     #[serde_as(as = "Option<serde_with::DurationSeconds<i64>>")]
     pub ping: Option<Duration>,
     pub max_retries: Option<u32>,
-    pub min_retry_delay: Option<u32>,
-    pub max_retry_delay: Option<u32>,
+    #[serde_as(as = "Option<serde_with::DurationSeconds<i64>>")]
+    pub min_retry_delay: Option<Duration>,
+    #[serde_as(as = "Option<serde_with::DurationSeconds<i64>>")]
+    pub max_retry_delay: Option<Duration>,
     pub retry_for_unexpected: Option<bool>,
 }
 
