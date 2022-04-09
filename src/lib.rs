@@ -6,15 +6,15 @@ use std::time::Duration;
 
 pub use anyhow;
 pub use async_trait;
-use mongodb::Client;
 pub use mongodb;
+use mongodb::Client;
 use mongodb::options::ClientOptions;
 use serde::{Deserialize, Serialize};
 
 use task::{TaskConfig, TaskInfo};
 
 use crate::app::common::TaskAppCommon;
-use crate::app::consumer::TaskConsumer;
+use crate::app::consumer::{TaskConsumeCore, TaskConsumeFunc, TaskConsumer};
 use crate::app::producer::TaskProducer;
 use crate::task::task_options::TaskOptions;
 use crate::task::TaskRequest;
@@ -22,6 +22,7 @@ use crate::task::TaskRequest;
 pub mod app;
 pub mod util;
 pub mod task;
+pub mod tasker;
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
 struct TestParams {}
@@ -63,15 +64,7 @@ impl Test {
 }
 
 #[async_trait::async_trait]
-impl TaskConsumer<TestInfo> for Test {
-    fn get_default_option(&'_ self) -> &'_ TaskConfig {
-        &self.config
-    }
-
-    fn get_concurrency(&'_ self) -> Option<&'_ AtomicUsize> {
-        Option::from(&self.concurrency)
-    }
-
+impl TaskConsumeFunc<TestInfo> for Test {
     async fn consume(self: Arc<Self>, task: <TestInfo as TaskInfo>::Params) -> anyhow::Result<<TestInfo as TaskInfo>::Returns> {
         println!("consuming {:?}", task);
         tokio::time::sleep(Duration::from_secs(50)).await;
@@ -80,6 +73,19 @@ impl TaskConsumer<TestInfo> for Test {
         Ok(())
     }
 }
+
+impl TaskConsumeCore<TestInfo> for Test {
+    fn get_default_option(&'_ self) -> &'_ TaskConfig {
+        &self.config
+    }
+
+    fn get_concurrency(&'_ self) -> Option<&'_ AtomicUsize> {
+        Option::from(&self.concurrency)
+    }
+}
+
+#[async_trait::async_trait]
+impl TaskConsumer<TestInfo> for Test {}
 
 
 impl TaskAppCommon<TestInfo> for Test {

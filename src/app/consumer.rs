@@ -23,11 +23,19 @@ struct TaskInfoNextRunTime {
 }
 
 #[async_trait]
-pub trait TaskConsumer<T: TaskInfo + 'static>: Send + Sync + std::marker::Sized + 'static + TaskAppCommon<T> {
+pub trait TaskConsumeFunc<T: TaskInfo>: Send + Sync + std::marker::Sized + 'static {
+    async fn consume(self: Arc<Self>, params: <T as TaskInfo>::Params) -> anyhow::Result<<T as TaskInfo>::Returns>;
+}
+
+#[async_trait]
+pub trait TaskConsumeCore<T: TaskInfo>: Send + Sync + std::marker::Sized + 'static + TaskAppCommon<T> {
     fn get_default_option(&'_ self) -> &'_ TaskConfig;
     fn get_concurrency(&'_ self) -> Option<&'_ AtomicUsize>;
+}
+
+#[async_trait]
+pub trait TaskConsumer<T: TaskInfo>: TaskConsumeFunc<T> + TaskConsumeCore<T> {
     /// how the client handle the task
-    async fn consume(self: Arc<Self>, params: T::Params) -> anyhow::Result<T::Returns>;
     async fn handle_execution_result(self: Arc<Self>, result: anyhow::Result<T::Returns>, key: String) -> anyhow::Result<bool> {
         let collection = self.get_collection();
         let filter = doc! {"key":&key};

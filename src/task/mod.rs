@@ -30,10 +30,10 @@ pub struct TaskRequest<T> where T: TaskInfo {
     pub param: T::Params,
 }
 
-pub trait TaskInfo: Send + Sync + Debug {
+pub trait TaskInfo: Send + Sync + 'static {
     /// The parameters of the task.
-    type Params: Clone + Send + Sync + Serialize + for<'de> Deserialize<'de> + Unpin + Debug;
+    type Params: Clone + Send + Sync + Serialize + for<'de> Deserialize<'de> + Unpin + Debug + 'static;
 
     /// The return type of the task.
-    type Returns: Clone + Send + Sync + Serialize + for<'de> Deserialize<'de> + Unpin + Debug;
+    type Returns: Clone + Send + Sync + Serialize + for<'de> Deserialize<'de> + Unpin + Debug + 'static;
 }
