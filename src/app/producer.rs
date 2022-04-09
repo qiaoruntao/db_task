@@ -43,4 +43,10 @@ pub trait TaskProducer<T: TaskInfo>: Send + Sync + std::marker::Sized + 'static 
             }
         }
     }
+
+    // send a task with a unique key
+    async fn send_new_task(&self, param: T::Params) -> anyhow::Result<bool> {
+        let nanosecond = chrono::Local::now().timestamp_nanos();
+        self.send_task(format!("{}", nanosecond).as_str(), param).await
+    }
 }
