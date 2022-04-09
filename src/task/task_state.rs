@@ -17,11 +17,10 @@ pub struct TaskState {
     pub create_time: DateTime<Local>,
     /// next time can this task run, None means run immediately
     #[serde(
-    serialize_with = "serialize_datetime_option_as_datetime",
-    deserialize_with = "deserialize_datetime_as_datetime_option"
+    serialize_with = "serialize_datetime_as_datetime",
+    deserialize_with = "deserialize_datetime_as_datetime"
     )]
-    #[serde(default)]
-    pub next_run_time: Option<DateTime<Local>>,
+    pub next_run_time: DateTime<Local>,
     /// success time
     #[serde(
     serialize_with = "serialize_datetime_option_as_datetime",
@@ -58,22 +57,15 @@ pub struct TaskState {
 pub struct TaskStateNextRunTime {
     /// next time can this task run
     #[serde(
-    serialize_with = "serialize_datetime_option_as_datetime",
-    deserialize_with = "deserialize_datetime_as_datetime_option"
+    serialize_with = "serialize_datetime_as_datetime",
+    deserialize_with = "deserialize_datetime_as_datetime"
     )]
-    #[serde(default)]
-    pub next_run_time: Option<DateTime<Local>>,
+    pub next_run_time: DateTime<Local>,
 }
 
 impl TaskState {
     pub fn can_run(&self) -> bool {
-        if let Some(next_run_time) = self.next_run_time {
-            next_run_time <= chrono::Local::now()
-        } else {
-            // if not specified, run immediately
-            warn!("next_run_time not set");
-            true
-        }
+        self.next_run_time <= chrono::Local::now()
     }
 
     /// current time related
@@ -81,7 +73,7 @@ impl TaskState {
         let now = Local::now();
         TaskState {
             create_time: now,
-            next_run_time: allow_run_time,
+            next_run_time: allow_run_time.unwrap_or_else(|| chrono::Local::now()),
             success_time: None,
             ping_time: None,
             cancel_time: None,

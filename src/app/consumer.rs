@@ -5,7 +5,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use chrono::{DateTime, Local};
 use futures::{FutureExt, StreamExt};
-use mongodb::bson::{Bson, doc};
+use mongodb::bson::{Bson, doc, Document};
 use mongodb::change_stream::event::ChangeStreamEvent;
 use mongodb::Collection;
 use mongodb::options::{ChangeStreamOptions, FindOneAndUpdateOptions, FindOneOptions, FullDocumentType, ReturnDocument};
@@ -136,19 +136,11 @@ pub trait TaskConsumer<T: TaskInfo>: TaskConsumeFunc<T> + TaskConsumeCore<T> {
     async fn handle_change_stream(self: Arc<Self>, event: ChangeStreamEvent<TaskStateNextRunTime>) -> Option<DateTime<Local>> {
         debug!("handle_change_stream");
         dbg!(&event);
-        event.full_document
-            .map(|doc| doc.next_run_time)
-            .unwrap_or(None)
+        event.full_document.map(|doc| doc.next_run_time)
     }
 
     async fn search_and_occupy(self: Arc<Self>, collection: &Collection<TaskRequest<T>>) -> Option<TaskRequest<T>> {
-        let filter = doc! {
-            "state.success_time":Bson::Null,
-            "state.cancel_time":Bson::Null,
-            "state.next_run_time":{
-                "$lte":chrono::Local::now()
-            }
-        };
+        let filter = Self::gen_can_run_filter(true);
         let update = doc! {
             "$set":{
                 "state.next_run_time":chrono::Local::now()+self.get_default_option().global_options.ping.unwrap()*2,
@@ -168,6 +160,18 @@ pub trait TaskConsumer<T: TaskInfo>: TaskConsumeFunc<T> + TaskConsumeCore<T> {
         }
     }
 
+    fn gen_can_run_filter(can_run_now: bool) -> Document {
+        let mut filter = Document::default();
+        filter.insert("state.success_time", Bson::Null);
+        filter.insert("state.cancel_time", Bson::Null);
+        if can_run_now {
+            filter.insert("$or", vec![
+                doc! {"state.next_run_time":{"$lte":chrono::Local::now()}},
+            ]);
+        }
+        filter
+    }
+
     async fn fetch_next_run_time(self: Arc<Self>) -> anyhow::Result<Option<DateTime<Local>>> {
         debug!("fetch_next_run_time");
         let collection = self.get_collection();
@@ -180,14 +184,14 @@ pub trait TaskConsumer<T: TaskInfo>: TaskConsumeFunc<T> + TaskConsumeCore<T> {
         };
         let mut find_one_options = FindOneOptions::default();
         find_one_options.projection = Some(doc! {
-            "state.next_run_time":1
+            "state.next_run_time":1_i32
         });
         find_one_options.sort = Some(doc! {
-            "state.next_run_time":1
+            "state.next_run_time":1_i32
         });
         match collection.clone_with_type::<TaskInfoNextRunTime>().find_one(filter, Some(find_one_options)).await {
             Ok(Some(task_info)) => {
-                Ok(task_info.state.next_run_time)
+                Ok(Option::from(task_info.state.next_run_time))
             }
             Err(e) => {
                 error!("{:?}",e);
@@ -265,22 +269,37 @@ pub trait TaskConsumer<T: TaskInfo>: TaskConsumeFunc<T> + TaskConsumeCore<T> {
             return Err(anyhow::Error::msg("unique index is not set"));
         }
         let collection = self.get_collection();
+        let filter = Self::gen_can_run_filter(false);
         // very helpful resource
         // https://www.percona.com/blog/2018/03/07/using-mongodb-3-6-change-streams/
         let pipeline = [
             doc! {
                 "$match":{
-                    "operationType":{"$in":["insert", "update", "replace"]},
                     "$or":[
-                        {"updateDescription.updatedFields.state.next_run_time":{"$exists":true}},
-                        {"updateDescription.removedFields.state.next_run_time":{"$exists":true}}
+                        // assume all inserted task can run
+                        {"operationType":"insert"},
+                        {
+                            "$and":[
+                                {"operationType":"update"},
+                                {
+                                    "$or":[
+                                        {"updateDescription.updatedFields.state.next_run_time":{"$exists":true}},
+                                        {"updateDescription.removedFields.state.next_run_time":{"$exists":true}}
+                                    ]
+                                }
+                            ]
+                        }
                     ]
                 }
             },
             doc! {
                 "$addFields":{
-                    "fullDocument":"$fullDocument.state"
+                    "fullDocument":"$fullDocument.state",
+                    "state":"$fullDocument.state"
                 }
+            },
+            doc! {
+                "$match":filter
             },
             doc! {
                 "$project":{

@@ -7,7 +7,7 @@ pub fn init_logger() {
     LogTracer::init().expect("Failed to set logger");
 
     let env_filter = EnvFilter::try_from_default_env()
-        .unwrap_or_else(|_| EnvFilter::new("error,db_task2=debug"));
+        .unwrap_or_else(|_| EnvFilter::new("error,db_task=debug"));
     let fmt_layer = fmt::Layer::default()
         .with_timer(LocalTime::rfc_3339())
         .with_writer(std::io::stdout);
