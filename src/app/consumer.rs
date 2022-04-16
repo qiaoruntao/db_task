@@ -48,6 +48,7 @@ pub trait TaskConsumer<T: TaskInfo>: TaskConsumeFunc<T> + TaskConsumeCore<T> {
             }
             Err(e) => {
                 error!("execution failed, e={}",e);
+                // TODO: calculate delay for failed task
                 let delay = retry_delay.unwrap_or_else(|| chrono::Duration::seconds(10));
                 let next_run_time = chrono::Local::now() + delay;
                 let update = doc! {"$set":{"state.prev_fail_time":chrono::Local::now(), "state.next_run_time":next_run_time}};
@@ -224,8 +225,8 @@ pub trait TaskConsumer<T: TaskInfo>: TaskConsumeFunc<T> + TaskConsumeCore<T> {
         // if we don't have concurrency, we won't search
         let task = self.clone().search_and_occupy(collection).await;
         if !is_changed && task.is_some() {
-            // TODO: not sure about this
-            error!("changed but get new task");
+            // FIXME: why?
+            error!("not changed but get new task");
         }
         let arc = self.clone();
         let add_task = async move {

@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
 
-use mongodb::{Client, Collection};
+use mongodb::{Client, Collection, Database};
 use mongodb::options::ClientOptions;
 
 use crate::{TaskAppCommon, TaskConfig, TaskConsumer, TaskInfo, TaskProducer, TaskRequest};

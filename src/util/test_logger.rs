@@ -3,7 +3,7 @@ use tracing_log::LogTracer;
 use tracing_subscriber::{EnvFilter, fmt, layer::SubscriberExt, Registry};
 use tracing_subscriber::fmt::time::LocalTime;
 
-pub fn init_logger() {
+pub(crate) fn init_logger() {
     LogTracer::init().expect("Failed to set logger");
 
     let env_filter = EnvFilter::try_from_default_env()
