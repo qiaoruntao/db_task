@@ -41,35 +41,46 @@ pub trait TaskProducer<T: TaskInfo>: Send + Sync + std::marker::Sized + 'static 
     }
 
     // FIXME: this will fully replace the task content(like params), which may have unintended effect
+    // returns whether some task is replaced
     async fn replace_task(&self, key: &str, param: T::Params) -> anyhow::Result<bool> {
         let collection = self.get_collection();
         let request = Self::gen_request(key, param);
-        let query = doc! {"key":key};
+        let query = doc! {
+            "key":key,
+            "state.next_run_time":{
+                "$lte":chrono::Local::now(),
+            }
+        };
         let mut request_document = mongodb::bson::to_document(&request).expect("cannot serialize");
         // state is generated in the db
         let state = request_document.remove("state").expect("no state in request");
         let update = vec![
-            doc!{
+            doc! {
                 "$replaceWith":{
                     "$mergeObjects": [request_document, {
                         "state": {
-                            "$mergeObjects": [state, "$$ROOT.state", {
-                                // task may be running
-                                "next_run_time": "$$ROOT.state.next_run_time",
-                                // TODO: do we really need to preserve create time
-                                "create_time": "$$ROOT.state.create_time"
-                            }]
+                            "$mergeObjects": [
+                                state,
+                                // the values need to preserve
+                                {
+                                    // task may be running
+                                    "next_run_time": "$$ROOT.state.next_run_time",
+                                    "ping_time": "$$ROOT.state.ping_time",
+                                    // TODO: do we really need to preserve create time
+                                    "create_time": "$$ROOT.state.create_time"
+                                }
+                            ]
                         }
                     }]
                 }
             }
         ];
+        debug!("{:?}", &update);
         let mut update_options = UpdateOptions::default();
         update_options.upsert = Some(true);
         match collection.update_one(query, update, Some(update_options)).await {
-            Ok(_result) => {
-                debug!("task inserted");
-                Ok(true)
+            Ok(result) => {
+                Ok(result.modified_count > 0)
             }
             Err(e) => {
                 match e.kind.as_ref() {

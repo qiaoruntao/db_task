@@ -80,6 +80,7 @@ pub trait TaskConsumer<T: TaskInfo>: TaskConsumeFunc<T> + TaskConsumeCore<T> {
         debug!("updating ping for task key={}",key);
         // update task state
         let now = chrono::Local::now();
+        // allow fail twice
         let next_run_time = now + chrono_duration + chrono_duration + chrono_duration;
         let identifier = doc! {
                         "key":&key,
@@ -113,6 +114,7 @@ pub trait TaskConsumer<T: TaskInfo>: TaskConsumeFunc<T> + TaskConsumeCore<T> {
         }
     }
     /// how the consumer handle the task
+    /// TODO: detect worker conflict
     async fn consume_task(self: Arc<Self>, key: String, params: T::Params, options: TaskOptions) {
         // TODO: the task state should be already updated, we start maintain work here
         let mut task_execution = self.clone().consume(params)
@@ -284,7 +286,11 @@ pub trait TaskConsumer<T: TaskInfo>: TaskConsumeFunc<T> + TaskConsumeCore<T> {
             },
             doc! {
                 "$project":{
+                    // _id cannot get filtered
+                    // error when filtered
                     "operationType":1_i32,
+                    // mongodb-rust says ns field should not get filtered
+                    "ns":1_i32,
                     "fullDocument.next_run_time":1_i32
                 }
             }
@@ -294,8 +300,6 @@ pub trait TaskConsumer<T: TaskInfo>: TaskConsumeFunc<T> + TaskConsumeCore<T> {
         // TODO: how actually does it work?
         change_stream_options.max_await_time = Some(Duration::from_secs(10));
         let watch_collection = collection.clone_with_type::<TaskStateNextRunTime>();
-        // TODO: what if tcp reset?
-        // TODO: update success time will incur another change stream event, cannot filter it
         let mut change_stream = match watch_collection.watch(pipeline, Some(change_stream_options)).await {
             Ok(value) => { value }
             Err(e) => {
