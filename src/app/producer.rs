@@ -1,5 +1,3 @@
-use std::sync::Arc;
-
 use async_trait::async_trait;
 use mongodb::bson::doc;
 use mongodb::error::{ErrorKind, WriteFailure};
@@ -12,7 +10,7 @@ use crate::task::task_state::TaskState;
 use crate::task::TaskRequest;
 
 #[async_trait]
-pub trait TaskProducer<T: TaskInfo>: Send + Sync + std::marker::Sized + 'static + TaskAppCommon<T> {
+pub trait TaskProducer<T: TaskInfo>: Send + Sync + Sized + 'static + TaskAppCommon<T> {
     async fn send_task(&self, key: &str, param: T::Params) -> anyhow::Result<bool> {
         let collection = self.get_collection();
         let request = Self::gen_request(key, param);

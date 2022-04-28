@@ -1,5 +1,5 @@
 use std::sync::Arc;
-use std::sync::atomic::{AtomicUsize, Ordering};
+use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
 
 use async_trait::async_trait;
@@ -205,7 +205,7 @@ pub trait TaskConsumer<T: TaskInfo>: TaskConsumeFunc<T> + TaskConsumeCore<T> {
         }
     }
 
-    async fn handle_sleep(self: Arc<Self>, collection: &Collection<TaskRequest<T>>, is_changed: bool) -> Option<chrono::DateTime<Local>> {
+    async fn handle_sleep(self: Arc<Self>, collection: &Collection<TaskRequest<T>>, is_changed: &AtomicBool) -> Option<chrono::DateTime<Local>> {
         debug!("handle_sleep");
         if let Some(concurrency) = self.get_concurrency() {
             // try acquire concurrency
@@ -226,7 +226,7 @@ pub trait TaskConsumer<T: TaskInfo>: TaskConsumeFunc<T> + TaskConsumeCore<T> {
         }
         // if we don't have concurrency, we won't search
         let task = self.clone().search_and_occupy(collection).await;
-        if !is_changed && task.is_some() {
+        if !is_changed.load(Ordering::SeqCst) && task.is_some() {
             // FIXME: why?
             error!("not changed but get new task");
         }
@@ -251,7 +251,7 @@ pub trait TaskConsumer<T: TaskInfo>: TaskConsumeFunc<T> + TaskConsumeCore<T> {
             add_task.await;
         }
 
-        if !is_changed {
+        if !is_changed.load(Ordering::SeqCst) {
             // no need to check now
             return None;
         }
@@ -310,12 +310,12 @@ pub trait TaskConsumer<T: TaskInfo>: TaskConsumeFunc<T> + TaskConsumeCore<T> {
         debug!("change stream listening");
         let mut wakeup_time = tokio::time::Instant::now();
         // whether remote dataset has changed, if not changed, we don't need to fetch anything from db
-        let mut is_changed = true;
+        let is_changed = AtomicBool::new(true);
         loop {
             tokio::select! {
                 _=tokio::time::sleep_until(wakeup_time)=>{
                     // will try to occupy and execute task
-                    if let Some(next_check_time)=self.clone().handle_sleep(collection,is_changed).await{
+                    if let Some(next_check_time)=self.clone().handle_sleep(collection,&is_changed).await{
                         wakeup_time = tokio::time::Instant::now()+(next_check_time-chrono::Local::now()).to_std()
                         .unwrap_or(Duration::ZERO);
                     }else{
@@ -326,14 +326,14 @@ pub trait TaskConsumer<T: TaskInfo>: TaskConsumeFunc<T> + TaskConsumeCore<T> {
                         .unwrap_or_else(|| chrono::Duration::seconds(10))
                         .to_std().unwrap();
                     }
-                    is_changed=false;
+                    is_changed.store(false, Ordering::SeqCst);
                 }
                 // None doesn't seem to exist
                 Some(stream_event)=change_stream.next()=>{
                     // change stream is only used to detect a better next run time now
                     debug!("{:#?}",&stream_event);
                     if let Ok(event)=stream_event{
-                        is_changed=true;
+                        is_changed.store(true, Ordering::SeqCst);
                         let this_check_time = match self.clone().handle_change_stream(event).await{
                             Some(value)=>value,
                             None=>{
