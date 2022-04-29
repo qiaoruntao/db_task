@@ -10,7 +10,7 @@ use mongodb::change_stream::event::ChangeStreamEvent;
 use mongodb::Collection;
 use mongodb::options::{ChangeStreamOptions, FindOneAndUpdateOptions, FindOneOptions, FullDocumentType, ReturnDocument};
 use serde::{Deserialize, Serialize};
-use tracing::{debug, error};
+use tracing::{debug, error, info};
 
 use crate::app::common::TaskAppCommon;
 use crate::task::{TaskConfig, TaskInfo, TaskRequest};
@@ -239,14 +239,16 @@ pub trait TaskConsumer<T: TaskInfo>: TaskConsumeFunc<T> + TaskConsumeCore<T> {
             }
         };
         if let Some(task) = task {
+            debug!("new task found");
             // handle the task
             tokio::spawn(async move {
                 self.clone().consume_task(task.key, task.param, task.options.unwrap_or_default()).await;
                 add_task.await;
             });
             // cannot infer a correct next-run-time right now, try occupy again
-            return Some(chrono::Local::now());
+            return Some(Local::now());
         } else {
+            debug!("no task found");
             // immediately use it
             add_task.await;
         }
@@ -255,7 +257,8 @@ pub trait TaskConsumer<T: TaskInfo>: TaskConsumeFunc<T> + TaskConsumeCore<T> {
             // no need to check now
             return None;
         }
-
+        // no pending task now
+        is_changed.store(false, Ordering::SeqCst);
         match self.fetch_next_run_time().await {
             Ok(time) => {
                 time
@@ -316,9 +319,11 @@ pub trait TaskConsumer<T: TaskInfo>: TaskConsumeFunc<T> + TaskConsumeCore<T> {
                 _=tokio::time::sleep_until(wakeup_time)=>{
                     // will try to occupy and execute task
                     if let Some(next_check_time)=self.clone().handle_sleep(collection,&is_changed).await{
+                        debug!("next_check_time={}", &next_check_time);
                         wakeup_time = tokio::time::Instant::now()+(next_check_time-chrono::Local::now()).to_std()
                         .unwrap_or(Duration::ZERO);
                     }else{
+                        debug!("next_check_time=None");
                         // nothing happened, we can sleep for a very long time until change stream notifies us
                         wakeup_time=tokio::time::Instant::now()
                         +self.get_default_option().global_options.ping
@@ -326,13 +331,14 @@ pub trait TaskConsumer<T: TaskInfo>: TaskConsumeFunc<T> + TaskConsumeCore<T> {
                         .unwrap_or_else(|| chrono::Duration::seconds(10))
                         .to_std().unwrap();
                     }
-                    is_changed.store(false, Ordering::SeqCst);
+                    debug!("mark as not changed");
                 }
                 // None doesn't seem to exist
                 Some(stream_event)=change_stream.next()=>{
                     // change stream is only used to detect a better next run time now
                     debug!("{:#?}",&stream_event);
                     if let Ok(event)=stream_event{
+                        debug!("mark as changed stream");
                         is_changed.store(true, Ordering::SeqCst);
                         let this_check_time = match self.clone().handle_change_stream(event).await{
                             Some(value)=>value,
