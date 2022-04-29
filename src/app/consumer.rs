@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
@@ -10,6 +11,7 @@ use mongodb::change_stream::event::ChangeStreamEvent;
 use mongodb::Collection;
 use mongodb::options::{ChangeStreamOptions, FindOneAndUpdateOptions, FindOneOptions, FullDocumentType, ReturnDocument};
 use serde::{Deserialize, Serialize};
+use tokio::sync::Mutex;
 use tracing::{debug, error, info};
 
 use crate::app::common::TaskAppCommon;
@@ -37,22 +39,18 @@ pub trait TaskConsumeCore<T: TaskInfo>: Send + Sync + std::marker::Sized + 'stat
 pub trait TaskConsumer<T: TaskInfo>: TaskConsumeFunc<T> + TaskConsumeCore<T> {
     /// how the client handle the task
     async fn handle_execution_result(self: Arc<Self>, result: anyhow::Result<T::Returns>, key: String, retry_delay: Option<chrono::Duration>) -> anyhow::Result<bool> {
-        let collection = self.get_collection();
-        let filter = doc! {"key":&key};
         let is_success = result.is_ok();
         // TODO: store the result?
         let update_result = match result {
             Ok(_returns) => {
+                let filter = doc! {"key":&key};
                 let update = doc! {"$set":{"state.success_time":chrono::Local::now()}};
+                let collection = self.get_collection();
                 collection.find_one_and_update(filter, update, None).await
             }
             Err(e) => {
                 error!("execution failed, e={}",e);
-                // TODO: calculate delay for failed task
-                let delay = retry_delay.unwrap_or_else(|| chrono::Duration::seconds(10));
-                let next_run_time = chrono::Local::now() + delay;
-                let update = doc! {"$set":{"state.prev_fail_time":chrono::Local::now(), "state.next_run_time":next_run_time}};
-                collection.find_one_and_update(filter, update, None).await
+                self.fail_task(&key, retry_delay).await
             }
         };
         let state = if is_success {
@@ -75,6 +73,16 @@ pub trait TaskConsumer<T: TaskInfo>: TaskConsumeFunc<T> + TaskConsumeCore<T> {
                 Err(e.into())
             }
         }
+    }
+
+    async fn fail_task(self: &Arc<Self>, key: &String, retry_delay: Option<chrono::Duration>) -> mongodb::error::Result<Option<TaskRequest<T>>> {
+        // TODO: calculate delay for failed task
+        let delay = retry_delay.unwrap_or_else(|| chrono::Duration::seconds(10));
+        let next_run_time = chrono::Local::now() + delay;
+        let update = doc! {"$set":{"state.prev_fail_time":chrono::Local::now(), "state.next_run_time":next_run_time}};
+        let filter = doc! {"key":&key};
+        let collection = self.get_collection();
+        collection.find_one_and_update(filter, update, None).await
     }
     async fn handle_wait_task_sleep(self: Arc<Self>, key: String, chrono_duration: chrono::Duration) -> anyhow::Result<()> {
         debug!("updating ping for task key={}",key);
@@ -205,7 +213,7 @@ pub trait TaskConsumer<T: TaskInfo>: TaskConsumeFunc<T> + TaskConsumeCore<T> {
         }
     }
 
-    async fn handle_sleep(self: Arc<Self>, collection: &Collection<TaskRequest<T>>, is_changed: &AtomicBool) -> Option<chrono::DateTime<Local>> {
+    async fn handle_sleep<'a>(self: Arc<Self>, collection: &Collection<TaskRequest<T>>, is_changed: &AtomicBool, tasks: Arc<Mutex<HashSet<String>>>) -> Option<DateTime<Local>> {
         debug!("handle_sleep");
         if let Some(concurrency) = self.get_concurrency() {
             // try acquire concurrency
@@ -226,10 +234,6 @@ pub trait TaskConsumer<T: TaskInfo>: TaskConsumeFunc<T> + TaskConsumeCore<T> {
         }
         // if we don't have concurrency, we won't search
         let task = self.clone().search_and_occupy(collection).await;
-        if !is_changed.load(Ordering::SeqCst) && task.is_some() {
-            // FIXME: why?
-            error!("not changed but get new task");
-        }
         let arc = self.clone();
         let add_task = async move {
             if let Some(currency) = arc.get_concurrency() {
@@ -242,8 +246,20 @@ pub trait TaskConsumer<T: TaskInfo>: TaskConsumeFunc<T> + TaskConsumeCore<T> {
             debug!("new task found");
             // handle the task
             tokio::spawn(async move {
-                self.clone().consume_task(task.key, task.param, task.options.unwrap_or_default()).await;
-                add_task.await;
+                let key = task.key;
+                let is_inserted = tasks.try_lock().unwrap().insert(key.clone());
+                if !is_inserted {
+                    error!("cannot insert current task key {}", &key);
+                }
+                self.clone().consume_task(key.clone(), task.param, task.options.unwrap_or_default()).await;
+                // when exiting, we may cannot lock the tasks
+                if let Ok(mut handler) = tasks.try_lock() {
+                    let is_removed = handler.remove(&key);
+                    if !is_removed {
+                        error!("cannot remove current task key {}", &key);
+                    }
+                    add_task.await;
+                }
             });
             // cannot infer a correct next-run-time right now, try occupy again
             return Some(Local::now());
@@ -312,13 +328,19 @@ pub trait TaskConsumer<T: TaskInfo>: TaskConsumeFunc<T> + TaskConsumeCore<T> {
         };
         debug!("change stream listening");
         let mut wakeup_time = tokio::time::Instant::now();
+        let tasks = Arc::new(Mutex::new(HashSet::new()));
         // whether remote dataset has changed, if not changed, we don't need to fetch anything from db
         let is_changed = AtomicBool::new(true);
         loop {
             tokio::select! {
+                _=tokio::signal::ctrl_c()=>{
+                    // stop the whole consumer
+                    info!("consumer stopping");
+                    break;
+                }
                 _=tokio::time::sleep_until(wakeup_time)=>{
                     // will try to occupy and execute task
-                    if let Some(next_check_time)=self.clone().handle_sleep(collection,&is_changed).await{
+                    if let Some(next_check_time)=self.clone().handle_sleep(collection,&is_changed, tasks.clone()).await{
                         debug!("next_check_time={}", &next_check_time);
                         wakeup_time = tokio::time::Instant::now()+(next_check_time-chrono::Local::now()).to_std()
                         .unwrap_or(Duration::ZERO);
@@ -352,5 +374,16 @@ pub trait TaskConsumer<T: TaskInfo>: TaskConsumeFunc<T> + TaskConsumeCore<T> {
                 }
             }
         }
+        info!("exiting");
+        // no new task will be occupied and execute now
+        for key in tasks.try_lock().unwrap().iter() {
+            // no retry delay so any other consumer can pick task up immediately
+            let fail_result = self.fail_task(key, Some(chrono::Duration::zero())).await;
+            if fail_result.is_err() {
+                error!("failed to fail task key={}", key);
+            }
+        }
+        info!("mark all task as failed, quit now");
+        Ok(())
     }
 }
