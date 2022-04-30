@@ -25,12 +25,12 @@ struct TaskInfoNextRunTime {
 }
 
 #[async_trait]
-pub trait TaskConsumeFunc<T: TaskInfo>: Send + Sync + std::marker::Sized + 'static {
+pub trait TaskConsumeFunc<T: TaskInfo>: Send + Sync + Sized + 'static {
     async fn consume(self: Arc<Self>, params: <T as TaskInfo>::Params) -> anyhow::Result<<T as TaskInfo>::Returns>;
 }
 
 #[async_trait]
-pub trait TaskConsumeCore<T: TaskInfo>: Send + Sync + std::marker::Sized + 'static + TaskAppCommon<T> {
+pub trait TaskConsumeCore<T: TaskInfo>: Send + Sync + Sized + 'static + TaskAppCommon<T> {
     fn get_default_option(&'_ self) -> &'_ TaskConfig;
     fn get_concurrency(&'_ self) -> Option<&'_ AtomicUsize>;
 }
@@ -74,7 +74,7 @@ pub trait TaskConsumer<T: TaskInfo>: TaskConsumeFunc<T> + TaskConsumeCore<T> {
             }
         }
     }
-
+    // fail the task with a next retry delay
     async fn fail_task(self: &Arc<Self>, key: &String, retry_delay: Option<chrono::Duration>) -> mongodb::error::Result<Option<TaskRequest<T>>> {
         // TODO: calculate delay for failed task
         let delay = retry_delay.unwrap_or_else(|| chrono::Duration::seconds(10));
@@ -84,6 +84,15 @@ pub trait TaskConsumer<T: TaskInfo>: TaskConsumeFunc<T> + TaskConsumeCore<T> {
         let collection = self.get_collection();
         collection.find_one_and_update(filter, update, None).await
     }
+
+    /// cancel the task
+    async fn cancel_task(self: &Arc<Self>, key: &String) -> mongodb::error::Result<Option<TaskRequest<T>>> {
+        let update = doc! {"$set":{"state.cancel_time":chrono::Local::now(), "state.next_run_time":Bson::Null}};
+        let filter = doc! {"key":&key};
+        let collection = self.get_collection();
+        collection.find_one_and_update(filter, update, None).await
+    }
+
     async fn handle_wait_task_sleep(self: Arc<Self>, key: String, chrono_duration: chrono::Duration) -> anyhow::Result<()> {
         debug!("updating ping for task key={}",key);
         // update task state
@@ -213,7 +222,7 @@ pub trait TaskConsumer<T: TaskInfo>: TaskConsumeFunc<T> + TaskConsumeCore<T> {
         }
     }
 
-    async fn handle_sleep<'a>(self: Arc<Self>, collection: &Collection<TaskRequest<T>>, is_changed: &AtomicBool, tasks: Arc<Mutex<HashSet<String>>>) -> Option<DateTime<Local>> {
+    async fn handle_sleep(self: Arc<Self>, collection: &Collection<TaskRequest<T>>, is_changed: &AtomicBool, tasks: Arc<Mutex<HashSet<String>>>) -> Option<DateTime<Local>> {
         debug!("handle_sleep");
         if let Some(concurrency) = self.get_concurrency() {
             // try acquire concurrency
@@ -252,7 +261,7 @@ pub trait TaskConsumer<T: TaskInfo>: TaskConsumeFunc<T> + TaskConsumeCore<T> {
                     error!("cannot insert current task key {}", &key);
                 }
                 self.clone().consume_task(key.clone(), task.param, task.options.unwrap_or_default()).await;
-                // when exiting, we may cannot lock the tasks
+                // when exiting, we cannot lock the tasks
                 if let Ok(mut handler) = tasks.try_lock() {
                     let is_removed = handler.remove(&key);
                     if !is_removed {
@@ -290,10 +299,11 @@ pub trait TaskConsumer<T: TaskInfo>: TaskConsumeFunc<T> + TaskConsumeCore<T> {
             return Err(anyhow::Error::msg("unique index is not set"));
         }
         let collection = self.get_collection();
-        let filter = Self::gen_can_run_filter(false);
+        let can_run_filter = Self::gen_can_run_filter(false);
         // very helpful resource
         // https://www.percona.com/blog/2018/03/07/using-mongodb-3-6-change-streams/
         let pipeline = [
+            // remove unnecessary fields
             doc! {
                 "$addFields":{
                     "fullDocument":"$fullDocument.state",
@@ -301,7 +311,7 @@ pub trait TaskConsumer<T: TaskInfo>: TaskConsumeFunc<T> + TaskConsumeCore<T> {
                 }
             },
             doc! {
-                "$match":filter
+                "$match":can_run_filter
             },
             doc! {
                 "$project":{
@@ -328,7 +338,7 @@ pub trait TaskConsumer<T: TaskInfo>: TaskConsumeFunc<T> + TaskConsumeCore<T> {
         };
         debug!("change stream listening");
         let mut wakeup_time = tokio::time::Instant::now();
-        let tasks = Arc::new(Mutex::new(HashSet::new()));
+        let running_tasks = Arc::new(Mutex::new(HashSet::new()));
         // whether remote dataset has changed, if not changed, we don't need to fetch anything from db
         let is_changed = AtomicBool::new(true);
         loop {
@@ -340,7 +350,7 @@ pub trait TaskConsumer<T: TaskInfo>: TaskConsumeFunc<T> + TaskConsumeCore<T> {
                 }
                 _=tokio::time::sleep_until(wakeup_time)=>{
                     // will try to occupy and execute task
-                    if let Some(next_check_time)=self.clone().handle_sleep(collection,&is_changed, tasks.clone()).await{
+                    if let Some(next_check_time)=self.clone().handle_sleep(collection,&is_changed, running_tasks.clone()).await{
                         debug!("next_check_time={}", &next_check_time);
                         wakeup_time = tokio::time::Instant::now()+(next_check_time-chrono::Local::now()).to_std()
                         .unwrap_or(Duration::ZERO);
@@ -353,7 +363,6 @@ pub trait TaskConsumer<T: TaskInfo>: TaskConsumeFunc<T> + TaskConsumeCore<T> {
                         .unwrap_or_else(|| chrono::Duration::seconds(10))
                         .to_std().unwrap();
                     }
-                    debug!("mark as not changed");
                 }
                 // None doesn't seem to exist
                 Some(stream_event)=change_stream.next()=>{
@@ -376,7 +385,7 @@ pub trait TaskConsumer<T: TaskInfo>: TaskConsumeFunc<T> + TaskConsumeCore<T> {
         }
         info!("exiting");
         // no new task will be occupied and execute now
-        for key in tasks.try_lock().unwrap().iter() {
+        for key in running_tasks.try_lock().unwrap().iter() {
             // no retry delay so any other consumer can pick task up immediately
             let fail_result = self.fail_task(key, Some(chrono::Duration::zero())).await;
             if fail_result.is_err() {
