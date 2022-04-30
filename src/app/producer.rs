@@ -101,14 +101,13 @@ pub trait TaskProducer<T: TaskInfo>: Send + Sync + Sized + 'static + TaskAppComm
     }
 
     fn gen_request(key: &str, param: <T as TaskInfo>::Params) -> TaskRequest<T> {
-        let request = TaskRequest {
+        TaskRequest {
             key: key.to_string(),
             options: Some(TaskOptions::default()),
             // default to run immediately
             state: TaskState::gen_initial(None),
             param,
-        };
-        request
+        }
     }
 
     // send a task with a unique key

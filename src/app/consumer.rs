@@ -258,7 +258,10 @@ pub trait TaskConsumer<T: TaskInfo>: TaskConsumeFunc<T> + TaskConsumeCore<T> {
                 let key = task.key;
                 let is_inserted = tasks.try_lock().unwrap().insert(key.clone());
                 if !is_inserted {
+                    // task duplicated, should not consume it
                     error!("cannot insert current task key {}", &key);
+                    add_task.await;
+                    return;
                 }
                 self.clone().consume_task(key.clone(), task.param, task.options.unwrap_or_default()).await;
                 // when exiting, we cannot lock the tasks
