@@ -1,6 +1,5 @@
 use chrono::{DateTime, Local};
 use serde::{Deserialize, Serialize};
-use tracing::warn;
 
 use crate::util::serde_helpers::*;
 
@@ -65,7 +64,7 @@ pub struct TaskStateNextRunTime {
 
 impl TaskState {
     pub fn can_run(&self) -> bool {
-        self.next_run_time <= chrono::Local::now()
+        self.next_run_time <= Local::now()
     }
 
     /// current time related
@@ -73,7 +72,7 @@ impl TaskState {
         let now = Local::now();
         TaskState {
             create_time: now,
-            next_run_time: allow_run_time.unwrap_or_else(|| chrono::Local::now()),
+            next_run_time: allow_run_time.unwrap_or_else(Local::now),
             success_time: None,
             ping_time: None,
             cancel_time: None,

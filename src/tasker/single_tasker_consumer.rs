@@ -1,17 +1,19 @@
 use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
 
-use mongodb::{Client, Collection, Database};
+use mongodb::{Client, Collection};
 use mongodb::options::ClientOptions;
 
-use crate::{TaskAppCommon, TaskConfig, TaskConsumer, TaskInfo, TaskProducer, TaskRequest};
-use crate::app::consumer::{TaskConsumeCore, TaskConsumeFunc};
+use crate::app::common::TaskAppCommon;
+use crate::app::consumer::{TaskConsumeCore, TaskConsumeFunc, TaskConsumer};
+use crate::app::producer::TaskProducer;
+use crate::task::{TaskConfig, TaskInfo, TaskRequest};
 
 // Given a collection and consume method, handle all the rest work of TaskConsumer generation
 pub struct SingleTaskerConsumer<T: TaskInfo, K: TaskConsumeFunc<T>> {
     config: TaskConfig,
     concurrency: Option<AtomicUsize>,
-    collection: mongodb::Collection<TaskRequest<T>>,
+    collection: Collection<TaskRequest<T>>,
     consumer: Arc<K>,
 }
 
@@ -63,13 +65,15 @@ impl<T: TaskInfo, K: TaskConsumeFunc<T>> TaskConsumeCore<T> for SingleTaskerCons
 
 impl<T: TaskInfo, K: TaskConsumeFunc<T>> TaskConsumer<T> for SingleTaskerConsumer<T, K> {}
 
-mod test {
+#[cfg(test)]
+mod tests {
     use std::env;
     use std::sync::Arc;
 
-    use crate::{TaskConsumeFunc, TaskConsumer, TaskInfo};
+    use crate::app::consumer::{TaskConsumeFunc, TaskConsumer};
+    use crate::task::TaskInfo;
     use crate::tasker::single_tasker_consumer::SingleTaskerConsumer;
-    use crate::util::test_logger::init_logger;
+    use crate::util::test_logger::tests::init_logger;
 
     struct TestA {}
 

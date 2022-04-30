@@ -4,8 +4,9 @@ use mongodb::error::{ErrorKind, WriteFailure};
 use mongodb::options::UpdateOptions;
 use tracing::{debug, error};
 
-use crate::{TaskInfo, TaskOptions};
 use crate::app::common::TaskAppCommon;
+use crate::task::task_options::TaskOptions;
+use crate::task::TaskInfo;
 use crate::task::task_state::TaskState;
 use crate::task::TaskRequest;
 

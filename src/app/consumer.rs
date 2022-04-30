@@ -16,8 +16,8 @@ use tracing::{debug, error, info};
 
 use crate::app::common::TaskAppCommon;
 use crate::task::{TaskConfig, TaskInfo, TaskRequest};
+use crate::task::task_options::TaskOptions;
 use crate::task::task_state::TaskStateNextRunTime;
-use crate::TaskOptions;
 
 #[derive(Clone, Serialize, Deserialize, Debug)]
 struct TaskInfoNextRunTime {
@@ -78,7 +78,7 @@ pub trait TaskConsumer<T: TaskInfo>: TaskConsumeFunc<T> + TaskConsumeCore<T> {
     async fn fail_task(self: &Arc<Self>, key: &String, retry_delay: Option<chrono::Duration>) -> mongodb::error::Result<Option<TaskRequest<T>>> {
         // TODO: calculate delay for failed task
         let delay = retry_delay.unwrap_or_else(|| chrono::Duration::seconds(10));
-        let next_run_time = chrono::Local::now() + delay;
+        let next_run_time = Local::now() + delay;
         let update = doc! {"$set":{"state.prev_fail_time":chrono::Local::now(), "state.next_run_time":next_run_time}};
         let filter = doc! {"key":&key};
         let collection = self.get_collection();
@@ -96,7 +96,7 @@ pub trait TaskConsumer<T: TaskInfo>: TaskConsumeFunc<T> + TaskConsumeCore<T> {
     async fn handle_wait_task_sleep(self: Arc<Self>, key: String, chrono_duration: chrono::Duration) -> anyhow::Result<()> {
         debug!("updating ping for task key={}",key);
         // update task state
-        let now = chrono::Local::now();
+        let now = Local::now();
         // allow fail twice
         let next_run_time = now + chrono_duration + chrono_duration + chrono_duration;
         let identifier = doc! {

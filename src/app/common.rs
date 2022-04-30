@@ -1,8 +1,8 @@
 use async_trait::async_trait;
 use futures::StreamExt;
 use mongodb::Collection;
+use crate::task::{TaskInfo, TaskRequest};
 
-use crate::{TaskInfo, TaskRequest};
 
 #[async_trait]
 pub trait TaskAppCommon<T: TaskInfo> {

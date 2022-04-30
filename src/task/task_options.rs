@@ -18,7 +18,7 @@ pub struct TaskOptions {
 
 impl TaskOptions {
     pub fn get_ping_time(&self) -> Duration {
-        self.ping.unwrap_or_else(||chrono::Duration::seconds(10))
+        self.ping.unwrap_or_else(||Duration::seconds(10))
     }
 }
 

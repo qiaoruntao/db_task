@@ -16,5 +16,6 @@ serde_with = { version = "1", features = ["chrono"] }
 tokio = { version = "1", features = ["signal"] }
 tracing = { version = "0.1", features = ["log"] }
 #tracing-futures = { version = "0.2.5", default-features = false }
+[dev-dependencies]
 tracing-subscriber = { version = "0.3", features = ["local-time", "env-filter", "std"] }
 tracing-log = "0.1"

@@ -1,111 +1,108 @@
 extern crate core;
 
-use std::sync::Arc;
-use std::sync::atomic::AtomicUsize;
-use std::time::Duration;
 
 pub use anyhow;
 pub use async_trait;
 pub use mongodb;
-use mongodb::Client;
-use mongodb::options::ClientOptions;
-use serde::{Deserialize, Serialize};
-
-use task::{TaskConfig, TaskInfo};
-
-use crate::app::common::TaskAppCommon;
-use crate::app::consumer::{TaskConsumeCore, TaskConsumeFunc, TaskConsumer};
-use crate::app::producer::TaskProducer;
-use crate::task::task_options::TaskOptions;
-use crate::task::TaskRequest;
 
 pub mod app;
 pub mod util;
 pub mod task;
 pub mod tasker;
 
-#[derive(Clone, Serialize, Deserialize, Debug)]
-struct TestParams {}
-
-
-#[derive(Debug)]
-struct TestInfo {}
-
-impl TaskInfo for TestInfo {
-    type Params = TestParams;
-    type Returns = ();
-}
-
-struct Test {
-    config: TaskConfig,
-    concurrency: AtomicUsize,
-    collection: mongodb::Collection<TaskRequest<TestInfo>>,
-}
-
-impl Test {
-    async fn init(connection_str: &str, collection_name: &str) -> Self {
-        let mut client_options = ClientOptions::parse(connection_str).await.unwrap();
-        let target_database = client_options.default_database.clone().unwrap();
-        // Manually set an option.
-        client_options.app_name = Some(collection_name.to_string());
-
-        // Get a handle to the deployment.
-        let client = Client::with_options(client_options).unwrap();
-        let database = client.database(target_database.as_str());
-        let collection = database.collection::<TaskRequest<TestInfo>>(collection_name);
-        let config: TaskConfig = Default::default();
-        let max_concurrency = config.max_concurrency as usize;
-        Test {
-            config,
-            concurrency: AtomicUsize::new(max_concurrency),
-            collection,
-        }
-    }
-}
-
-#[async_trait::async_trait]
-impl TaskConsumeFunc<TestInfo> for Test {
-    async fn consume(self: Arc<Self>, task: <TestInfo as TaskInfo>::Params) -> anyhow::Result<<TestInfo as TaskInfo>::Returns> {
-        println!("consuming {:?}", task);
-        tokio::time::sleep(Duration::from_secs(50)).await;
-        println!("consumed {:?}", task);
-
-        Ok(())
-    }
-}
-
-impl TaskConsumeCore<TestInfo> for Test {
-    fn get_default_option(&'_ self) -> &'_ TaskConfig {
-        &self.config
-    }
-
-    fn get_concurrency(&'_ self) -> Option<&'_ AtomicUsize> {
-        Option::from(&self.concurrency)
-    }
-}
-
-#[async_trait::async_trait]
-impl TaskConsumer<TestInfo> for Test {}
-
-
-impl TaskAppCommon<TestInfo> for Test {
-    fn get_collection(&self) -> &mongodb::Collection<TaskRequest<TestInfo>> {
-        &self.collection
-    }
-}
-
-#[async_trait::async_trait]
-impl TaskProducer<TestInfo> for Test {}
 
 #[cfg(test)]
-mod tests {
+pub mod tests {
     use std::env;
     use std::sync::Arc;
+    use std::sync::atomic::AtomicUsize;
+    use std::time::Duration;
 
     use futures::future::join_all;
+    use mongodb::Client;
+    use mongodb::options::ClientOptions;
+    use serde::{Deserialize, Serialize};
+    use tracing::{error, info};
 
-    use crate::{TaskConsumer, TaskProducer, Test, TestParams};
-    use crate::util::test_logger::init_logger;
+    use crate::app::common::TaskAppCommon;
+    use crate::app::consumer::{TaskConsumeCore, TaskConsumeFunc, TaskConsumer};
+    use crate::app::producer::TaskProducer;
+    use crate::task::{TaskConfig, TaskInfo};
+    use crate::task::TaskRequest;
+    use crate::util::test_logger::tests::init_logger;
+
+    #[derive(Clone, Serialize, Deserialize, Debug)]
+    pub struct TestParams {}
+
+
+    #[derive(Debug)]
+    struct TestInfo {}
+
+    impl TaskInfo for TestInfo {
+        type Params = TestParams;
+        type Returns = ();
+    }
+
+    pub struct Test {
+        config: TaskConfig,
+        concurrency: AtomicUsize,
+        collection: mongodb::Collection<TaskRequest<TestInfo>>,
+    }
+
+    impl Test {
+        pub(crate) async fn init(connection_str: &str, collection_name: &str) -> Self {
+            let mut client_options = ClientOptions::parse(connection_str).await.unwrap();
+            let target_database = client_options.default_database.clone().unwrap();
+            // Manually set an option.
+            client_options.app_name = Some(collection_name.to_string());
+
+            // Get a handle to the deployment.
+            let client = Client::with_options(client_options).unwrap();
+            let database = client.database(target_database.as_str());
+            let collection = database.collection::<TaskRequest<TestInfo>>(collection_name);
+            let config: TaskConfig = Default::default();
+            let max_concurrency = config.max_concurrency as usize;
+            Test {
+                config,
+                concurrency: AtomicUsize::new(max_concurrency),
+                collection,
+            }
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl TaskConsumeFunc<TestInfo> for Test {
+        async fn consume(self: Arc<Self>, task: <TestInfo as TaskInfo>::Params) -> anyhow::Result<<TestInfo as TaskInfo>::Returns> {
+            println!("consuming {:?}", task);
+            tokio::time::sleep(Duration::from_secs(50)).await;
+            println!("consumed {:?}", task);
+
+            Ok(())
+        }
+    }
+
+    impl TaskConsumeCore<TestInfo> for Test {
+        fn get_default_option(&'_ self) -> &'_ TaskConfig {
+            &self.config
+        }
+
+        fn get_concurrency(&'_ self) -> Option<&'_ AtomicUsize> {
+            Option::from(&self.concurrency)
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl TaskConsumer<TestInfo> for Test {}
+
+
+    impl TaskAppCommon<TestInfo> for Test {
+        fn get_collection(&self) -> &mongodb::Collection<TaskRequest<TestInfo>> {
+            &self.collection
+        }
+    }
+
+    #[async_trait::async_trait]
+    impl TaskProducer<TestInfo> for Test {}
 
     #[tokio::test]
     async fn start() {
@@ -114,8 +111,14 @@ mod tests {
         let collection_name = env::var("MongoDbCollection").unwrap();
         let x = Test::init(connection_str.as_str(), collection_name.as_str()).await;
         let x = Arc::new(x);
-        let result = x.start().await;
-        dbg!(&result);
+        tokio::select! {
+            Err(e)=x.start()=>{
+                error!("failed to start consumer, e={}", e);
+            }
+            _=tokio::time::sleep(tokio::time::Duration::from_secs(10))=>{
+                info!("consumer has run for 10 seconds, seems ok");
+            }
+        }
     }
 
     #[tokio::test]
@@ -131,7 +134,7 @@ mod tests {
                 tokio::spawn(async move {
                     let string = String::from(char);
                     let result = arc.send_task(string.as_str(), TestParams {}).await;
-                    dbg!(&result);
+                    info!("{:?}",&result);
                 })
             })
             .collect::<Vec<_>>();
