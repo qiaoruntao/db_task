@@ -1,13 +1,13 @@
 use async_trait::async_trait;
-use mongodb::bson::doc;
+use mongodb::bson::{Bson, doc};
 use mongodb::error::{ErrorKind, WriteFailure};
 use mongodb::options::UpdateOptions;
 use tracing::{debug, error};
 
 use crate::app::common::TaskAppCommon;
 use crate::task::task_options::TaskOptions;
-use crate::task::TaskInfo;
 use crate::task::task_state::TaskState;
+use crate::task::TaskInfo;
 use crate::task::TaskRequest;
 
 #[async_trait]
@@ -46,9 +46,11 @@ pub trait TaskProducer<T: TaskInfo>: Send + Sync + Sized + 'static + TaskAppComm
         let request = Self::gen_request(key, param);
         let query = doc! {
             "key":key,
-            "state.next_run_time":{
-                "$lte":chrono::Local::now(),
-            }
+            "$or": [
+                { "state.next_run_time": { "$lte": chrono::Local::now() } },
+                { "state.complete_time": { "$ne": Bson::Null } },
+                { "state.cancel_time": { "$ne": Bson::Null } },
+            ]
         };
         let mut request_document = mongodb::bson::to_document(&request).expect("cannot serialize");
         // state is generated in the db
