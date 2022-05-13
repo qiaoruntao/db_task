@@ -3,7 +3,7 @@ use std::sync::atomic::AtomicUsize;
 use mongodb::{Client, Collection};
 use mongodb::options::ClientOptions;
 
-use crate::app::common::TaskAppCommon;
+use crate::app::common::{TaskAppBasicOperations, TaskAppCommon};
 use crate::app::consumer::TaskConsumeCore;
 use crate::app::producer::TaskProducer;
 use crate::task::{TaskConfig, TaskInfo, TaskRequest};
@@ -20,6 +20,8 @@ impl<T: TaskInfo> TaskAppCommon<T> for SingleTaskerProducer<T> {
         &self.collection
     }
 }
+
+impl<T: TaskInfo> TaskAppBasicOperations<T> for SingleTaskerProducer<T> {}
 
 impl<T: TaskInfo> TaskProducer<T> for SingleTaskerProducer<T> {}
 
@@ -58,7 +60,7 @@ mod test {
     use std::env;
     use std::sync::Arc;
 
-    use crate::app::producer::TaskProducer;
+    use crate::app::common::TaskAppBasicOperations;
     use crate::task::TaskInfo;
     use crate::tasker::single_tasker_producer::SingleTaskerProducer;
     use crate::util::test_logger::tests::init_logger;

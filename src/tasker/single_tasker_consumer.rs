@@ -4,9 +4,8 @@ use std::sync::atomic::AtomicUsize;
 use mongodb::{Client, Collection};
 use mongodb::options::ClientOptions;
 
-use crate::app::common::TaskAppCommon;
+use crate::app::common::{TaskAppBasicOperations, TaskAppCommon};
 use crate::app::consumer::{TaskConsumeCore, TaskConsumeFunc, TaskConsumer};
-use crate::app::producer::TaskProducer;
 use crate::task::{TaskConfig, TaskInfo, TaskRequest};
 
 // Given a collection and consume method, handle all the rest work of TaskConsumer generation
@@ -50,7 +49,7 @@ impl<T: TaskInfo, K: TaskConsumeFunc<T>> TaskConsumeFunc<T> for SingleTaskerCons
     }
 }
 
-impl<T: TaskInfo, K: TaskConsumeFunc<T>> TaskProducer<T> for SingleTaskerConsumer<T, K> {}
+impl<T: TaskInfo, K: TaskConsumeFunc<T>> TaskAppBasicOperations<T> for SingleTaskerConsumer<T, K> {}
 
 #[async_trait::async_trait]
 impl<T: TaskInfo, K: TaskConsumeFunc<T>> TaskConsumeCore<T> for SingleTaskerConsumer<T, K> {

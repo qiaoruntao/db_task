@@ -18,14 +18,14 @@ pub mod tests {
     use std::sync::atomic::AtomicUsize;
     use std::time::Duration;
 
-    use futures::future::{err, join_all};
+    use futures::future::join_all;
     use mongodb::Client;
     use mongodb::options::ClientOptions;
     use serde::{Deserialize, Serialize};
     use tracing::{error, info};
     use tracing::log::debug;
 
-    use crate::app::common::TaskAppCommon;
+    use crate::app::common::{TaskAppBasicOperations, TaskAppCommon};
     use crate::app::consumer::{TaskConsumeCore, TaskConsumeFunc, TaskConsumer};
     use crate::app::producer::TaskProducer;
     use crate::task::{TaskConfig, TaskInfo};
@@ -95,6 +95,8 @@ pub mod tests {
     #[async_trait::async_trait]
     impl TaskConsumer<TestInfo> for Test {}
 
+    #[async_trait::async_trait]
+    impl TaskAppBasicOperations<TestInfo> for Test {}
 
     impl TaskAppCommon<TestInfo> for Test {
         fn get_collection(&self) -> &mongodb::Collection<TaskRequest<TestInfo>> {

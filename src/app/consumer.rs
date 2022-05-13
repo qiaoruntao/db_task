@@ -6,7 +6,7 @@ use std::time::Duration;
 use async_trait::async_trait;
 use chrono::{DateTime, Local};
 use futures::{FutureExt, StreamExt};
-use mongodb::bson::{Bson, doc, Document};
+use mongodb::bson::{Bson, doc};
 use mongodb::change_stream::event::ChangeStreamEvent;
 use mongodb::Collection;
 use mongodb::options::{ChangeStreamOptions, FindOneAndUpdateOptions, FindOneOptions, FullDocumentType, ReturnDocument};
@@ -14,7 +14,7 @@ use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
 use tracing::{debug, error, info};
 
-use crate::app::common::TaskAppCommon;
+use crate::app::common::{TaskAppBasicOperations, TaskAppCommon};
 use crate::task::{TaskConfig, TaskInfo, TaskRequest};
 use crate::task::task_options::TaskOptions;
 use crate::task::task_state::TaskStateNextRunTime;
@@ -30,7 +30,7 @@ pub trait TaskConsumeFunc<T: TaskInfo>: Send + Sync + Sized + 'static {
 }
 
 #[async_trait]
-pub trait TaskConsumeCore<T: TaskInfo>: Send + Sync + Sized + 'static + TaskAppCommon<T> {
+pub trait TaskConsumeCore<T: TaskInfo>: Send + Sync + Sized + 'static + TaskAppCommon<T> + TaskAppBasicOperations<T> {
     fn get_default_option(&'_ self) -> &'_ TaskConfig;
     fn get_concurrency(&'_ self) -> Option<&'_ AtomicUsize>;
 }
@@ -73,24 +73,6 @@ pub trait TaskConsumer<T: TaskInfo>: TaskConsumeFunc<T> + TaskConsumeCore<T> {
                 Err(e.into())
             }
         }
-    }
-    // fail the task with a next retry delay
-    async fn fail_task(self: &Arc<Self>, key: &String, retry_delay: Option<chrono::Duration>) -> mongodb::error::Result<Option<TaskRequest<T>>> {
-        // TODO: calculate delay for failed task
-        let delay = retry_delay.unwrap_or_else(|| chrono::Duration::seconds(10));
-        let next_run_time = Local::now() + delay;
-        let update = doc! {"$set":{"state.prev_fail_time":chrono::Local::now(), "state.next_run_time":next_run_time}};
-        let filter = doc! {"key":&key};
-        let collection = self.get_collection();
-        collection.find_one_and_update(filter, update, None).await
-    }
-
-    /// cancel the task
-    async fn cancel_task(self: &Arc<Self>, key: &String) -> mongodb::error::Result<Option<TaskRequest<T>>> {
-        let update = doc! {"$set":{"state.cancel_time":chrono::Local::now(), "state.next_run_time":Bson::Null}};
-        let filter = doc! {"key":&key};
-        let collection = self.get_collection();
-        collection.find_one_and_update(filter, update, None).await
     }
 
     async fn handle_wait_task_sleep(self: Arc<Self>, key: String, chrono_duration: chrono::Duration) -> anyhow::Result<()> {
@@ -160,37 +142,6 @@ pub trait TaskConsumer<T: TaskInfo>: TaskConsumeFunc<T> + TaskConsumeCore<T> {
         event.full_document.map(|doc| doc.next_run_time)
     }
 
-    async fn search_and_occupy(self: Arc<Self>, collection: &Collection<TaskRequest<T>>) -> Option<TaskRequest<T>> {
-        let filter = Self::gen_can_run_filter(true);
-        let update = doc! {
-            "$set":{
-                "state.next_run_time":chrono::Local::now()+self.get_default_option().global_options.ping.unwrap()*2,
-                "state.ping_time":chrono::Local::now(),
-            }
-        };
-        let mut options = FindOneAndUpdateOptions::default();
-        options.return_document = Option::from(ReturnDocument::After);
-        match collection.find_one_and_update(filter, update, Some(options)).await {
-            Ok(value) => {
-                value
-            }
-            Err(e) => {
-                dbg!(&e);
-                None
-            }
-        }
-    }
-
-    fn gen_can_run_filter(can_run_now: bool) -> Document {
-        let mut filter = Document::default();
-        filter.insert("state.success_time", Bson::Null);
-        filter.insert("state.cancel_time", Bson::Null);
-        if can_run_now {
-            filter.insert("state.next_run_time", doc! {"$lte":chrono::Local::now()});
-        }
-        filter
-    }
-
     async fn fetch_next_run_time(self: Arc<Self>) -> anyhow::Result<Option<DateTime<Local>>> {
         debug!("fetch_next_run_time");
         let collection = self.get_collection();
@@ -218,6 +169,27 @@ pub trait TaskConsumer<T: TaskInfo>: TaskConsumeFunc<T> + TaskConsumeCore<T> {
             }
             _ => {
                 Ok(None)
+            }
+        }
+    }
+
+    async fn search_and_occupy(self: Arc<Self>, collection: &Collection<TaskRequest<T>>) -> Option<TaskRequest<T>> {
+        let filter = Self::gen_can_run_filter(true);
+        let update = doc! {
+            "$set":{
+                "state.next_run_time":chrono::Local::now()+self.get_default_option().global_options.ping.unwrap()*2,
+                "state.ping_time":chrono::Local::now(),
+            }
+        };
+        let mut options = FindOneAndUpdateOptions::default();
+        options.return_document = Option::from(ReturnDocument::After);
+        match collection.find_one_and_update(filter, update, Some(options)).await {
+            Ok(value) => {
+                value
+            }
+            Err(e) => {
+                dbg!(&e);
+                None
             }
         }
     }
@@ -296,6 +268,7 @@ pub trait TaskConsumer<T: TaskInfo>: TaskConsumeFunc<T> + TaskConsumeCore<T> {
             }
         }
     }
+
     async fn start(self: Arc<Self>) -> anyhow::Result<()> {
         // TODO: need to check before send task
         if !self.check_collection_index().await {
