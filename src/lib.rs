@@ -18,11 +18,12 @@ pub mod tests {
     use std::sync::atomic::AtomicUsize;
     use std::time::Duration;
 
-    use futures::future::join_all;
+    use futures::future::{err, join_all};
     use mongodb::Client;
     use mongodb::options::ClientOptions;
     use serde::{Deserialize, Serialize};
     use tracing::{error, info};
+    use tracing::log::debug;
 
     use crate::app::common::TaskAppCommon;
     use crate::app::consumer::{TaskConsumeCore, TaskConsumeFunc, TaskConsumer};
@@ -139,5 +140,32 @@ pub mod tests {
             })
             .collect::<Vec<_>>();
         join_all(vec).await;
+    }
+
+    #[tokio::test]
+    async fn replace_task() {
+        init_logger();
+        let connection_str = env::var("MongoDbStr").unwrap();
+        let collection_name = env::var("MongoDbCollection").unwrap();
+        let x = Test::init(connection_str.as_str(), collection_name.as_str()).await;
+        let arc = Arc::new(x);
+        // create a new task for test
+        let timestamp = chrono::Local::now().timestamp().to_string();
+        let send_result = arc.send_task(timestamp.as_str(), TestParams {}).await;
+        if send_result.is_err() {
+            error!("failed to send task");
+        }
+        let fetch_result = arc.fetch_task(timestamp.as_str()).await;
+        if let Ok(task) = fetch_result {
+            debug!("{:?}",&task);
+        }
+        let replace_result = arc.replace_task(timestamp.as_str(), TestParams {}).await;
+        if replace_result.is_err() {
+            error!("failed to send task");
+        }
+        let fetch_result = arc.fetch_task(timestamp.as_str()).await;
+        if let Ok(task) = fetch_result {
+            debug!("{:?}",&task);
+        }
     }
 }

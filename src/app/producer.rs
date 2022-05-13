@@ -1,3 +1,5 @@
+use std::future::Future;
+
 use async_trait::async_trait;
 use mongodb::bson::{Bson, doc};
 use mongodb::error::{ErrorKind, WriteFailure};
@@ -35,6 +37,21 @@ pub trait TaskProducer<T: TaskInfo>: Send + Sync + Sized + 'static + TaskAppComm
                         Err(e.into())
                     }
                 }
+            }
+        }
+    }
+
+    async fn fetch_task(&self, key: &str) -> anyhow::Result<TaskRequest<T>> {
+        let collection = self.get_collection();
+        match collection.find_one(doc! {"key":key}, None).await {
+            Ok(Some(task)) => {
+                anyhow::Ok(task)
+            }
+            Ok(None) => {
+                Err(anyhow::Error::msg("cannot find task"))
+            }
+            Err(e) => {
+                Err(anyhow::Error::new(e))
             }
         }
     }
