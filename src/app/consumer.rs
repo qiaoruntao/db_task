@@ -1,4 +1,5 @@
 use std::collections::HashSet;
+use std::ops::Add;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, AtomicUsize, Ordering};
 use std::time::Duration;
@@ -12,7 +13,7 @@ use mongodb::Collection;
 use mongodb::options::{ChangeStreamOptions, FindOneAndUpdateOptions, FindOneOptions, FullDocumentType, ReturnDocument};
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
-use tracing::{debug, error, info};
+use tracing::{debug, error, info, warn};
 
 use crate::app::common::{TaskAppBasicOperations, TaskAppCommon};
 use crate::task::{TaskConfig, TaskInfo, TaskRequest};
@@ -225,6 +226,14 @@ pub trait TaskConsumer<T: TaskInfo>: TaskConsumeFunc<T> + TaskConsumeCore<T> {
         };
         if let Some(task) = task {
             debug!("new task found");
+            let next_run_time = task.state.next_run_time;
+            let max_allowed_time = next_run_time + chrono::Duration::seconds(10);
+
+            let now = Local::now();
+            if max_allowed_time < now {
+                // TODO: for test purpose, check if some task is delayed
+                warn!("task delayed key={} next_run_time is {}, now is {}", &task.key, &next_run_time, &now);
+            }
             // handle the task
             tokio::spawn(async move {
                 let key = task.key;
@@ -291,8 +300,7 @@ pub trait TaskConsumer<T: TaskInfo>: TaskConsumeFunc<T> + TaskConsumeCore<T> {
             },
             doc! {
                 "$project":{
-                    // _id cannot get filtered
-                    // error when filtered
+                    // _id cannot get filtered, will get error if filtered
                     "operationType":1_i32,
                     // mongodb-rust says ns field should not get filtered
                     "ns":1_i32,

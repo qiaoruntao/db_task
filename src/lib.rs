@@ -161,6 +161,9 @@ pub mod tests {
         if let Ok(task) = fetch_result {
             debug!("{:?}",&task);
         }
+        if let Ok(result) = arc.fail_task(&timestamp, None).await {
+            debug!("{:?}",&result);
+        }
         let replace_result = arc.replace_task(timestamp.as_str(), TestParams {}).await;
         if replace_result.is_err() {
             error!("failed to send task");
