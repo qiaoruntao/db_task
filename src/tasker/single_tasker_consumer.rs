@@ -2,7 +2,8 @@ use std::sync::Arc;
 use std::sync::atomic::AtomicUsize;
 
 use mongodb::{Client, Collection};
-use mongodb::options::ClientOptions;
+use mongodb::options::{ClientOptions, ResolverConfig};
+use tracing::info;
 
 use crate::app::common::{TaskAppBasicOperations, TaskAppCommon};
 use crate::app::consumer::{TaskConsumeCore, TaskConsumeFunc, TaskConsumer};
@@ -18,7 +19,12 @@ pub struct SingleTaskerConsumer<T: TaskInfo, K: TaskConsumeFunc<T>> {
 
 impl<T: TaskInfo, K: TaskConsumeFunc<T>> SingleTaskerConsumer<T, K> {
     pub async fn init(connection_str: &str, collection_name: &str, consumer: K) -> Self {
-        let mut client_options = ClientOptions::parse(connection_str).await.unwrap();
+        let mut client_options = if cfg!(windows) && connection_str.contains("+srv") {
+            info!("test");
+            ClientOptions::parse_with_resolver_config(connection_str, ResolverConfig::quad9()).await.unwrap()
+        } else {
+            ClientOptions::parse(connection_str).await.unwrap()
+        };
         let target_database = client_options.default_database.clone().unwrap();
         // Manually set an option.
         client_options.app_name = Some(collection_name.to_string());
