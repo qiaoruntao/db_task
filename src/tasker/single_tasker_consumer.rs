@@ -101,4 +101,14 @@ mod tests {
         let result = tasker.start().await;
         dbg!(&result);
     }
+
+    #[tokio::test]
+    async fn test_init() {
+        init_logger();
+        let connection_str = env::var("MongoDbStr").unwrap();
+        let collection_name = env::var("MongoDbCollection").unwrap();
+        let tasker = SingleTaskerConsumer::<TestA, RunnerA>::init(connection_str.as_str(), collection_name.as_str(), RunnerA {}).await;
+        let tasker = Arc::new(tasker);
+        tokio::spawn(tasker.start());
+    }
 }
