@@ -2,7 +2,7 @@ use std::sync::atomic::AtomicUsize;
 
 use mongodb::{Client, Collection};
 use mongodb::options::{ClientOptions, ResolverConfig};
-use tracing::info;
+use tracing::{info, instrument};
 
 use crate::app::common::{TaskAppBasicOperations, TaskAppCommon};
 use crate::app::consumer::TaskConsumeCore;
@@ -38,6 +38,7 @@ impl<T: TaskInfo> TaskConsumeCore<T> for SingleTaskerProducer<T> {
 }
 
 impl<T: TaskInfo> SingleTaskerProducer<T> {
+    #[instrument]
     pub async fn init(connection_str: &str, collection_name: &str) -> Self {
         let mut client_options = if cfg!(windows) && connection_str.contains("+srv") {
             info!("test");

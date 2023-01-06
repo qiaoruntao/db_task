@@ -3,7 +3,7 @@ use std::sync::atomic::AtomicUsize;
 
 use mongodb::{Client, Collection};
 use mongodb::options::{ClientOptions, ResolverConfig};
-use tracing::info;
+use tracing::{info, instrument};
 
 use crate::app::common::{TaskAppBasicOperations, TaskAppCommon};
 use crate::app::consumer::{TaskConsumeCore, TaskConsumeFunc, TaskConsumer};
@@ -50,6 +50,7 @@ impl<T: TaskInfo, K: TaskConsumeFunc<T>> TaskAppCommon<T> for SingleTaskerConsum
 
 #[async_trait::async_trait]
 impl<T: TaskInfo, K: TaskConsumeFunc<T>> TaskConsumeFunc<T> for SingleTaskerConsumer<T, K> {
+    #[instrument(skip_all,err)]
     async fn consume(self: Arc<Self>, params: <T as TaskInfo>::Params) -> anyhow::Result<<T as TaskInfo>::Returns> {
         self.consumer.clone().consume(params).await
     }

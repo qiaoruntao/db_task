@@ -7,12 +7,14 @@ use async_trait::async_trait;
 use chrono::{DateTime, Local};
 use futures::{FutureExt, StreamExt};
 use mongodb::bson::{Bson, doc};
+use mongodb::change_stream::ChangeStream;
 use mongodb::change_stream::event::ChangeStreamEvent;
 use mongodb::Collection;
 use mongodb::options::{ChangeStreamOptions, FindOneAndUpdateOptions, FindOneOptions, FullDocumentType, ReturnDocument};
 use serde::{Deserialize, Serialize};
 use tokio::sync::Mutex;
-use tracing::{debug, error, info, warn};
+use tokio::time::Instant;
+use tracing::{debug, error, info, instrument, warn};
 
 use crate::app::common::{TaskAppBasicOperations, TaskAppCommon};
 use crate::task::{TaskConfig, TaskInfo, TaskRequest};
@@ -38,6 +40,7 @@ pub trait TaskConsumeCore<T: TaskInfo>: Send + Sync + Sized + 'static + TaskAppC
 #[async_trait]
 pub trait TaskConsumer<T: TaskInfo>: TaskConsumeFunc<T> + TaskConsumeCore<T> {
     /// how the client handle the task
+    #[instrument(skip(self))]
     async fn handle_execution_result(self: Arc<Self>, result: anyhow::Result<T::Returns>, key: String, retry_delay: Option<chrono::Duration>) -> anyhow::Result<bool> {
         let is_success = result.is_ok();
         // TODO: store the result?
@@ -75,6 +78,7 @@ pub trait TaskConsumer<T: TaskInfo>: TaskConsumeFunc<T> + TaskConsumeCore<T> {
         }
     }
 
+    #[instrument(skip(self))]
     async fn handle_wait_task_sleep(self: Arc<Self>, key: String, chrono_duration: chrono::Duration) -> anyhow::Result<()> {
         debug!("updating ping for task key={}",key);
         // update task state
@@ -114,6 +118,7 @@ pub trait TaskConsumer<T: TaskInfo>: TaskConsumeFunc<T> + TaskConsumeCore<T> {
     }
     /// how the consumer handle the task
     /// TODO: detect worker conflict
+    #[instrument(skip(self))]
     async fn consume_task(self: Arc<Self>, key: String, params: T::Params, options: TaskOptions) {
         // TODO: the task state should be already updated, we start maintain work here
         let mut task_execution = self.clone().consume(params)
@@ -142,6 +147,7 @@ pub trait TaskConsumer<T: TaskInfo>: TaskConsumeFunc<T> + TaskConsumeCore<T> {
         event.full_document.map(|doc| doc.next_run_time)
     }
 
+    #[instrument(skip(self), ret, err)]
     async fn fetch_next_run_time(self: Arc<Self>) -> anyhow::Result<Option<DateTime<Local>>> {
         debug!("fetch_next_run_time");
         let collection = self.get_collection();
@@ -173,6 +179,7 @@ pub trait TaskConsumer<T: TaskInfo>: TaskConsumeFunc<T> + TaskConsumeCore<T> {
         }
     }
 
+    #[instrument(skip_all, fields(collection_name = collection.name(), task_key))]
     async fn search_and_occupy(self: Arc<Self>, collection: &Collection<TaskRequest<T>>) -> Option<TaskRequest<T>> {
         let filter = Self::gen_can_run_filter(true);
         let update = doc! {
@@ -183,7 +190,7 @@ pub trait TaskConsumer<T: TaskInfo>: TaskConsumeFunc<T> + TaskConsumeCore<T> {
         };
         let mut options = FindOneAndUpdateOptions::default();
         options.return_document = Option::from(ReturnDocument::After);
-        match collection.find_one_and_update(filter, update, Some(options)).await {
+        let result = match collection.find_one_and_update(filter, update, Some(options)).await {
             Ok(value) => {
                 value
             }
@@ -191,9 +198,12 @@ pub trait TaskConsumer<T: TaskInfo>: TaskConsumeFunc<T> + TaskConsumeCore<T> {
                 dbg!(&e);
                 None
             }
-        }
+        };
+        let _task_key = result.as_ref().map(|result| result.key.clone());
+        result
     }
 
+    #[instrument(skip_all, fields(collection_name = collection.name()))]
     async fn handle_sleep(self: Arc<Self>, collection: &Collection<TaskRequest<T>>, is_changed: &AtomicBool, tasks: Arc<Mutex<HashSet<String>>>) -> Option<DateTime<Local>> {
         debug!("handle_sleep");
         if let Some(concurrency) = self.get_concurrency() {

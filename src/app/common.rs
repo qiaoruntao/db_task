@@ -5,7 +5,7 @@ use mongodb::bson::{Bson, doc, Document};
 use mongodb::Collection;
 use mongodb::error::{ErrorKind, WriteFailure};
 use mongodb::options::UpdateOptions;
-use tracing::{debug, error};
+use tracing::{debug, error, instrument};
 
 use crate::task::{TaskInfo, TaskRequest};
 use crate::task::task_options::TaskOptions;
@@ -17,6 +17,7 @@ pub trait TaskAppCommon<T: TaskInfo> {
 
     /// check if key is a unique index right now,
     /// key should be unique as we use key to search a specific task
+    #[instrument(skip_all,ret)]
     async fn check_collection_index(&self) -> bool {
         let collection = self.get_collection();
         let mut cursor = collection.list_indexes(None).await.unwrap();
@@ -36,6 +37,7 @@ pub trait TaskAppCommon<T: TaskInfo> {
 
 #[async_trait]
 pub trait TaskAppBasicOperations<T: TaskInfo>: TaskAppCommon<T> {
+    #[instrument(skip(self,param),ret,err)]
     async fn send_task(&self, key: &str, param: T::Params) -> anyhow::Result<bool> {
         let collection = self.get_collection();
         let request = Self::gen_request(key, param);
@@ -63,6 +65,7 @@ pub trait TaskAppBasicOperations<T: TaskInfo>: TaskAppCommon<T> {
         }
     }
 
+    #[instrument(skip(self),err)]
     async fn fetch_task(&self, key: &str) -> anyhow::Result<TaskRequest<T>> {
         let collection = self.get_collection();
         match collection.find_one(doc! {"key":key}, None).await {
@@ -80,6 +83,7 @@ pub trait TaskAppBasicOperations<T: TaskInfo>: TaskAppCommon<T> {
 
     // FIXME: this will fully replace the task content(like params), which may have unintended effect
     // returns whether some task is replaced
+    #[instrument(skip(self,param),err,ret)]
     async fn replace_task(&self, key: &str, param: T::Params) -> anyhow::Result<bool> {
         let collection = self.get_collection();
         let request = Self::gen_request(key, param);
@@ -152,6 +156,7 @@ pub trait TaskAppBasicOperations<T: TaskInfo>: TaskAppCommon<T> {
     }
 
     // send a task with a unique key
+    #[instrument(skip_all)]
     async fn send_new_task(&self, param: T::Params) -> anyhow::Result<bool> {
         // FIXME: assume this is unique
         let nanosecond = Local::now().timestamp_nanos();
@@ -159,6 +164,7 @@ pub trait TaskAppBasicOperations<T: TaskInfo>: TaskAppCommon<T> {
     }
 
     // fail the task with a next retry delay
+    #[instrument(skip(self),err)]
     async fn fail_task(&self, key: &String, retry_delay: Option<chrono::Duration>) -> mongodb::error::Result<Option<TaskRequest<T>>> {
         // TODO: calculate delay for failed task
         let delay = retry_delay.unwrap_or_else(|| chrono::Duration::seconds(10));
@@ -170,6 +176,7 @@ pub trait TaskAppBasicOperations<T: TaskInfo>: TaskAppCommon<T> {
     }
 
     /// cancel the task
+    #[instrument(skip(self), err)]
     async fn cancel_task(&self, key: &String) -> mongodb::error::Result<Option<TaskRequest<T>>> {
         let update = doc! {"$set":{"state.cancel_time":chrono::Local::now(), "state.next_run_time":Bson::Null}};
         let filter = doc! {"key":&key};

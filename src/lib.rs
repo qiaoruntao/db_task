@@ -173,4 +173,15 @@ pub mod tests {
             debug!("{:?}",&task);
         }
     }
+
+    #[tokio::test]
+    async fn test_speed() {
+        init_logger();
+        let connection_str = env::var("MongoDbStr").unwrap();
+        let collection_name = env::var("MongoDbCollection").unwrap();
+        let x = Arc::new(Test::init(connection_str.as_str(), collection_name.as_str()).await);
+        tokio::spawn(x.start());
+        let test_cnt = 1000;
+        for index in 0..test_cnt {}
+    }
 }
